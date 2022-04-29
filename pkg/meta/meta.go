@@ -57,6 +57,10 @@ const (
 	// of a resource that indicates the last time creation of the external
 	// resource failed. Its value must be an RFC3999 timestamp.
 	AnnotationKeyExternalCreateFailed = "crossplane.io/external-create-failed"
+
+	// AnnotationKeyPolicyRun is the name of an annotation which instructs
+	// the provider how to run the corresponding Ansible contents
+	AnnotationKeyPolicyRun = "ansible.crossplane.io/runPolicy"
 )
 
 // Supported resources with all of these annotations will be fully or partially
@@ -257,6 +261,16 @@ func WasCreated(o metav1.Object) bool {
 	// returns a reference while CreationTimestamp returns a value.
 	t := o.GetCreationTimestamp()
 	return !t.IsZero()
+}
+
+// GetPolicyRun returns the ansible run policy annotation value on the resource.
+func GetPolicyRun(o metav1.Object) string {
+	return o.GetAnnotations()[AnnotationKeyPolicyRun]
+}
+
+// SetPolicyRun sets the ansible run policy annotation of the resource.
+func SetPolicyRun(o metav1.Object, name string) {
+	AddAnnotations(o, map[string]string{AnnotationKeyPolicyRun: name})
 }
 
 // GetExternalName returns the external name annotation value on the resource.
