@@ -18,25 +18,38 @@ package managed
 
 import (
 	"context"
+	"encoding/json"
 
+	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	corev1 "k8s.io/api/core/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+)
+
+const (
+	// fieldOwnerAPISimpleRefResolver owns the reference fields
+	// the managed reconciler resolves.
+	fieldOwnerAPISimpleRefResolver = "managed.crossplane.io/api-simple-reference-resolver"
 )
 
 // Error strings.
 const (
 	errCreateOrUpdateSecret      = "cannot create or update connection secret"
 	errUpdateManaged             = "cannot update managed resource"
+	errPatchManaged              = "cannot patch the managed resource via server-side apply"
+	errMarshalExisting           = "cannot marshal the existing object into JSON"
+	errMarshalResolved           = "cannot marshal the object with the resolved references into JSON"
+	errPreparePatch              = "cannot prepare the JSON merge patch for the resolved object"
 	errUpdateManagedStatus       = "cannot update managed resource status"
 	errResolveReferences         = "cannot resolve references"
 	errUpdateCriticalAnnotations = "cannot update critical annotations"
@@ -58,26 +71,6 @@ func (a *NameAsExternalName) Initialize(ctx context.Context, mg resource.Managed
 		return nil
 	}
 	meta.SetExternalName(mg, mg.GetName())
-	return errors.Wrap(a.client.Update(ctx, mg), errUpdateManaged)
-}
-
-// DefaultProviderConfig fills the ProviderConfigRef with `default` if it's left
-// empty.
-// Deprecated: Use OpenAPI schema defaulting instead.
-type DefaultProviderConfig struct{ client client.Client }
-
-// NewDefaultProviderConfig returns a new DefaultProviderConfig.
-// Deprecated: Use OpenAPI schema defaulting instead.
-func NewDefaultProviderConfig(c client.Client) *DefaultProviderConfig {
-	return &DefaultProviderConfig{client: c}
-}
-
-// Initialize the given managed resource.
-func (a *DefaultProviderConfig) Initialize(ctx context.Context, mg resource.Managed) error {
-	if mg.GetProviderConfigReference() != nil {
-		return nil
-	}
-	mg.SetProviderConfigReference(&xpv1.Reference{Name: "default"})
 	return errors.Wrap(a.client.Update(ctx, mg), errUpdateManaged)
 }
 
@@ -115,6 +108,7 @@ func (a *APISecretPublisher) PublishConnection(ctx context.Context, o resource.C
 		resource.AllowUpdateIf(func(current, desired runtime.Object) bool {
 			// We consider the update to be a no-op and don't allow it if the
 			// current and existing secret data are identical.
+			//nolint:forcetypeassert // Will always be a secret.
 			return !cmp.Equal(current.(*corev1.Secret).Data, desired.(*corev1.Secret).Data, cmpopts.EquateEmpty())
 		}),
 	)
@@ -132,7 +126,7 @@ func (a *APISecretPublisher) PublishConnection(ctx context.Context, o resource.C
 // UnpublishConnection is no-op since PublishConnection only creates resources
 // that will be garbage collected by Kubernetes when the managed resource is
 // deleted.
-func (a *APISecretPublisher) UnpublishConnection(ctx context.Context, o resource.ConnectionSecretOwner, c ConnectionDetails) error {
+func (a *APISecretPublisher) UnpublishConnection(_ context.Context, _ resource.ConnectionSecretOwner, _ ConnectionDetails) error {
 	return nil
 }
 
@@ -150,11 +144,32 @@ func NewAPISimpleReferenceResolver(c client.Client) *APISimpleReferenceResolver 
 	return &APISimpleReferenceResolver{client: c}
 }
 
+func prepareJSONMerge(existing, resolved runtime.Object) ([]byte, error) {
+	// restore the to be replaced GVK so that the existing object is
+	// not modified by this function.
+	defer existing.GetObjectKind().SetGroupVersionKind(existing.GetObjectKind().GroupVersionKind())
+	// we need the apiVersion and kind in the patch document so we set them
+	// to their zero values and make them available in the calculated patch
+	// in the first place, instead of an unmarshal/marshal from the prepared
+	// patch []byte later.
+	existing.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{})
+	eBuff, err := json.Marshal(existing)
+	if err != nil {
+		return nil, errors.Wrap(err, errMarshalExisting)
+	}
+	rBuff, err := json.Marshal(resolved)
+	if err != nil {
+		return nil, errors.Wrap(err, errMarshalResolved)
+	}
+	patch, err := jsonpatch.CreateMergePatch(eBuff, rBuff)
+	return patch, errors.Wrap(err, errPreparePatch)
+}
+
 // ResolveReferences of the supplied managed resource by calling its
 // ResolveReferences method, if any.
 func (a *APISimpleReferenceResolver) ResolveReferences(ctx context.Context, mg resource.Managed) error {
 	rr, ok := mg.(interface {
-		ResolveReferences(context.Context, client.Reader) error
+		ResolveReferences(ctx context.Context, r client.Reader) error
 	})
 	if !ok {
 		// This managed resource doesn't have any references to resolve.
@@ -166,12 +181,16 @@ func (a *APISimpleReferenceResolver) ResolveReferences(ctx context.Context, mg r
 		return errors.Wrap(err, errResolveReferences)
 	}
 
-	if cmp.Equal(existing, mg) {
+	if cmp.Equal(existing, mg, cmpopts.EquateEmpty()) {
 		// The resource didn't change during reference resolution.
 		return nil
 	}
 
-	return errors.Wrap(a.client.Update(ctx, mg), errUpdateManaged)
+	patch, err := prepareJSONMerge(existing, mg)
+	if err != nil {
+		return err
+	}
+	return errors.Wrap(a.client.Patch(ctx, mg, client.RawPatch(types.ApplyPatchType, patch), client.FieldOwner(fieldOwnerAPISimpleRefResolver), client.ForceOwnership), errPatchManaged)
 }
 
 // A RetryingCriticalAnnotationUpdater is a CriticalAnnotationUpdater that
@@ -188,18 +207,23 @@ func NewRetryingCriticalAnnotationUpdater(c client.Client) *RetryingCriticalAnno
 
 // UpdateCriticalAnnotations updates (i.e. persists) the annotations of the
 // supplied Object. It retries in the face of any API server error several times
-// in order to ensure annotations that contain critical state are persisted. Any
-// pending changes to the supplied Object's spec, status, or other metadata are
-// reset to their current state according to the API server.
+// in order to ensure annotations that contain critical state are persisted.
+// Pending changes to the supplied Object's spec, status, or other metadata
+// might get reset to their current state according to the API server, e.g. in
+// case of a conflict error.
 func (u *RetryingCriticalAnnotationUpdater) UpdateCriticalAnnotations(ctx context.Context, o client.Object) error {
 	a := o.GetAnnotations()
-	err := retry.OnError(retry.DefaultRetry, resource.IsAPIError, func() error {
-		nn := types.NamespacedName{Name: o.GetName()}
-		if err := u.client.Get(ctx, nn, o); err != nil {
-			return err
+	err := retry.OnError(retry.DefaultRetry, func(err error) bool {
+		return !errors.Is(err, context.Canceled)
+	}, func() error {
+		err := u.client.Update(ctx, o)
+		if kerrors.IsConflict(err) {
+			if getErr := u.client.Get(ctx, client.ObjectKeyFromObject(o), o); getErr != nil {
+				return getErr
+			}
+			meta.AddAnnotations(o, a)
 		}
-		meta.AddAnnotations(o, a)
-		return u.client.Update(ctx, o)
+		return err
 	})
 	return errors.Wrap(err, errUpdateCriticalAnnotations)
 }

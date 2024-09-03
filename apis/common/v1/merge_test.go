@@ -22,8 +22,8 @@ import (
 	"sort"
 	"testing"
 
+	"dario.cat/mergo"
 	"github.com/google/go-cmp/cmp"
-	"github.com/imdario/mergo"
 )
 
 type mergoOptArr []func(*mergo.Config)
@@ -84,7 +84,6 @@ func TestMergoConfiguration(t *testing.T) {
 			if diff := cmp.Diff(tc.want.names(), mergoOptArr(tc.mo.MergoConfiguration()).names()); diff != "" {
 				t.Errorf("\nmo.MergoConfiguration(): -want, +got:\n %s", diff)
 			}
-
 		})
 	}
 }

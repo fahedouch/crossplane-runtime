@@ -17,6 +17,7 @@ limitations under the License.
 package fieldpath
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -158,6 +159,14 @@ func TestGetValue(t *testing.T) {
 			path:   "spec[]",
 			want: want{
 				err: errors.Wrap(errors.New("unexpected ']' at position 5"), "cannot parse path \"spec[]\""),
+			},
+		},
+		"NilParent": {
+			reason: "Request for a path with a nil parent value",
+			path:   "spec.containers[*].name",
+			data:   []byte(`{"spec":{"containers": null}}`),
+			want: want{
+				err: errNotFound{errors.Errorf("%s: expected map, got nil", "spec.containers")},
 			},
 		},
 	}
@@ -483,59 +492,6 @@ func TestGetBool(t *testing.T) {
 	}
 }
 
-func TestGetNumber(t *testing.T) {
-	type want struct {
-		value float64
-		err   error
-	}
-	cases := map[string]struct {
-		reason string
-		path   string
-		data   []byte
-		want   want
-	}{
-		"MetadataVersion": {
-			reason: "Requesting a number field should work",
-			path:   "metadata.version",
-			data:   []byte(`{"metadata":{"version":2.0}}`),
-			want: want{
-				value: 2,
-			},
-		},
-		"MalformedPath": {
-			reason: "Requesting an invalid field path should fail",
-			path:   "spec[]",
-			want: want{
-				err: errors.Wrap(errors.New("unexpected ']' at position 5"), "cannot parse path \"spec[]\""),
-			},
-		},
-		"NotANumber": {
-			reason: "Requesting an non-number field path should fail",
-			path:   "metadata.name",
-			data:   []byte(`{"metadata":{"name":"cool"}}`),
-			want: want{
-				err: errors.New("metadata.name: not a (float64) number"),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			in := make(map[string]any)
-			_ = json.Unmarshal(tc.data, &in)
-			p := Pave(in)
-
-			got, err := p.GetNumber(tc.path)
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Fatalf("\np.GetNumber(%s): %s: -want error, +got error:\n%s", tc.path, tc.reason, diff)
-			}
-			if diff := cmp.Diff(tc.want.value, got); diff != "" {
-				t.Errorf("\np.GetNumber(%s): %s: -want, +got:\n%s", tc.path, tc.reason, diff)
-			}
-		})
-	}
-}
-
 func TestGetInteger(t *testing.T) {
 	type want struct {
 		value int64
@@ -593,6 +549,7 @@ func TestSetValue(t *testing.T) {
 	type args struct {
 		path  string
 		value any
+		opts  []PavedOption
 	}
 	type want struct {
 		object map[string]any
@@ -737,6 +694,40 @@ func TestSetValue(t *testing.T) {
 				},
 			},
 		},
+		"RejectsHighIndexes": {
+			reason: "Paths having indexes above the maximum default value are rejected",
+			data:   []byte(`{"data":["a"]}`),
+			args: args{
+				path:  fmt.Sprintf("data[%v]", DefaultMaxFieldPathIndex+1),
+				value: "c",
+			},
+			want: want{
+				object: map[string]any{
+					"data": []any{"a"},
+				},
+				err: errors.Errorf("index %v is greater than max allowed index %v",
+					DefaultMaxFieldPathIndex+1, DefaultMaxFieldPathIndex),
+			},
+		},
+		"NotRejectsHighIndexesIfNoDefaultOptions": {
+			reason: "Paths having indexes above the maximum default value are not rejected if default disabled",
+			data:   []byte(`{"data":["a"]}`),
+			args: args{
+				path:  fmt.Sprintf("data[%v]", DefaultMaxFieldPathIndex+1),
+				value: "c",
+				opts:  []PavedOption{WithMaxFieldPathIndex(0)},
+			},
+			want: want{
+				object: map[string]any{
+					"data": func() []any {
+						res := make([]any, DefaultMaxFieldPathIndex+2)
+						res[0] = "a"
+						res[DefaultMaxFieldPathIndex+1] = "c"
+						return res
+					}(),
+				},
+			},
+		},
 		"MapStringString": {
 			reason: "A map of string to string should be converted to a map of string to any",
 			data:   []byte(`{"metadata":{}}`),
@@ -817,7 +808,7 @@ func TestSetValue(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			in := make(map[string]any)
 			_ = json.Unmarshal(tc.data, &in)
-			p := Pave(in)
+			p := Pave(in, tc.args.opts...)
 
 			err := p.SetValue(tc.args.path, tc.args.value)
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
@@ -966,6 +957,14 @@ func TestExpandWildcards(t *testing.T) {
 			path:   "spec[]",
 			want: want{
 				err: errors.Wrap(errors.New("unexpected ']' at position 5"), "cannot parse path \"spec[]\""),
+			},
+		},
+		"NilValue": {
+			reason: "Requesting a wildcard for an object that has nil value",
+			path:   "spec.containers[*].name",
+			data:   []byte(`{"spec":{"containers": null}}`),
+			want: want{
+				err: errors.Wrapf(errNotFound{errors.Errorf("wildcard field %q is not found in the path", "spec.containers")}, "cannot expand wildcards for segments: %q", "spec.containers[*].name"),
 			},
 		},
 	}

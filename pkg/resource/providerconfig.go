@@ -49,7 +49,7 @@ func (m errMissingRef) MissingReference() bool { return true }
 // IsMissingReference returns true if an error indicates that a managed
 // resource is missing a required reference..
 func IsMissingReference(err error) bool {
-	_, ok := err.(interface { //nolint: errorlint // Skip errorlint for interface type
+	_, ok := err.(interface {
 		MissingReference() bool
 	})
 	return ok
@@ -59,7 +59,7 @@ func IsMissingReference(err error) bool {
 type EnvLookupFn func(string) string
 
 // ExtractEnv extracts credentials from an environment variable.
-func ExtractEnv(ctx context.Context, e EnvLookupFn, s xpv1.CommonCredentialSelectors) ([]byte, error) {
+func ExtractEnv(_ context.Context, e EnvLookupFn, s xpv1.CommonCredentialSelectors) ([]byte, error) {
 	if s.Env == nil {
 		return nil, errors.New(errExtractEnv)
 	}
@@ -67,7 +67,7 @@ func ExtractEnv(ctx context.Context, e EnvLookupFn, s xpv1.CommonCredentialSelec
 }
 
 // ExtractFs extracts credentials from the filesystem.
-func ExtractFs(ctx context.Context, fs afero.Fs, s xpv1.CommonCredentialSelectors) ([]byte, error) {
+func ExtractFs(_ context.Context, fs afero.Fs, s xpv1.CommonCredentialSelectors) ([]byte, error) {
 	if s.Fs == nil {
 		return nil, errors.New(errExtractFs)
 	}
@@ -88,7 +88,7 @@ func ExtractSecret(ctx context.Context, client client.Client, s xpv1.CommonCrede
 
 // CommonCredentialExtractor extracts credentials from common sources.
 func CommonCredentialExtractor(ctx context.Context, source xpv1.CredentialsSource, client client.Client, selector xpv1.CommonCredentialSelectors) ([]byte, error) {
-	switch source { // nolint:exhaustive
+	switch source {
 	case xpv1.CredentialsSourceEnvironment:
 		return ExtractEnv(ctx, os.Getenv, selector)
 	case xpv1.CredentialsSourceFilesystem:
@@ -97,8 +97,13 @@ func CommonCredentialExtractor(ctx context.Context, source xpv1.CredentialsSourc
 		return ExtractSecret(ctx, client, selector)
 	case xpv1.CredentialsSourceNone:
 		return nil, nil
+	case xpv1.CredentialsSourceInjectedIdentity:
+		// There is no common injected identity extractor. Each provider must
+		// implement their own.
+		fallthrough
+	default:
+		return nil, errors.Errorf(errNoHandlerForSourceFmt, source)
 	}
-	return nil, errors.Errorf(errNoHandlerForSourceFmt, source)
 }
 
 // A Tracker tracks managed resources.
@@ -133,6 +138,7 @@ func NewProviderConfigUsageTracker(c client.Client, of ProviderConfigUsage) *Pro
 // managed resource's usage is updated if the managed resource is updated to
 // reference a misconfigured ProviderConfig.
 func (u *ProviderConfigUsageTracker) Track(ctx context.Context, mg Managed) error {
+	//nolint:forcetypeassert // Will always be a PCU.
 	pcu := u.of.DeepCopyObject().(ProviderConfigUsage)
 	gvk := mg.GetObjectKind().GroupVersionKind()
 	ref := mg.GetProviderConfigReference()
@@ -153,6 +159,7 @@ func (u *ProviderConfigUsageTracker) Track(ctx context.Context, mg Managed) erro
 	err := u.c.Apply(ctx, pcu,
 		MustBeControllableBy(mg.GetUID()),
 		AllowUpdateIf(func(current, _ runtime.Object) bool {
+			//nolint:forcetypeassert // Will always be a PCU.
 			return current.(ProviderConfigUsage).GetProviderConfigReference() != pcu.GetProviderConfigReference()
 		}),
 	)

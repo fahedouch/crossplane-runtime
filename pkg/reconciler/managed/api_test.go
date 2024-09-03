@@ -21,8 +21,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
@@ -33,9 +35,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 )
 
-var (
-	_ Initializer = &NameAsExternalName{}
-)
+var _ Initializer = &NameAsExternalName{}
 
 func TestNameAsExternalName(t *testing.T) {
 	type args struct {
@@ -117,72 +117,6 @@ func TestNameAsExternalName(t *testing.T) {
 	}
 }
 
-func TestDefaultProviderConfig(t *testing.T) {
-	type args struct {
-		ctx context.Context
-		mg  resource.Managed
-	}
-
-	type want struct {
-		err error
-		mg  resource.Managed
-	}
-
-	errBoom := errors.New("boom")
-
-	cases := map[string]struct {
-		client client.Client
-		args   args
-		want   want
-	}{
-		"UpdateManagedError": {
-			client: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errBoom)},
-			args: args{
-				ctx: context.Background(),
-				mg:  &fake.Managed{},
-			},
-			want: want{
-				err: errors.Wrap(errBoom, errUpdateManaged),
-				mg:  &fake.Managed{ProviderConfigReferencer: fake.ProviderConfigReferencer{Ref: &xpv1.Reference{Name: "default"}}},
-			},
-		},
-		"UpdateSuccessful": {
-			client: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			args: args{
-				ctx: context.Background(),
-				mg:  &fake.Managed{},
-			},
-			want: want{
-				err: nil,
-				mg:  &fake.Managed{ProviderConfigReferencer: fake.ProviderConfigReferencer{Ref: &xpv1.Reference{Name: "default"}}},
-			},
-		},
-		"UpdateNotNeeded": {
-			args: args{
-				ctx: context.Background(),
-				mg:  &fake.Managed{ProviderConfigReferencer: fake.ProviderConfigReferencer{Ref: &xpv1.Reference{Name: "some-value"}}},
-			},
-			want: want{
-				err: nil,
-				mg:  &fake.Managed{ProviderConfigReferencer: fake.ProviderConfigReferencer{Ref: &xpv1.Reference{Name: "some-value"}}},
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			api := NewDefaultProviderConfig(tc.client)
-			err := api.Initialize(tc.args.ctx, tc.args.mg)
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("api.Initialize(...): -want error, +got error:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.mg, tc.args.mg, test.EquateConditions()); diff != "" {
-				t.Errorf("api.Initialize(...) Managed: -want, +got:\n%s", diff)
-			}
-		})
-	}
-}
-
 func TestAPISecretPublisher(t *testing.T) {
 	errBoom := errors.New("boom")
 
@@ -240,11 +174,11 @@ func TestAPISecretPublisher(t *testing.T) {
 		"AlreadyPublished": {
 			reason: "An up to date connection secret should result in no error and not being published",
 			fields: fields{
-				secret: resource.ApplyFn(func(_ context.Context, o client.Object, ao ...resource.ApplyOption) error {
+				secret: resource.ApplyFn(func(ctx context.Context, o client.Object, ao ...resource.ApplyOption) error {
 					want := resource.ConnectionSecretFor(mg, fake.GVK(mg))
 					want.Data = cd
 					for _, fn := range ao {
-						if err := fn(context.Background(), o, want); err != nil {
+						if err := fn(ctx, o, want); err != nil {
 							return err
 						}
 					}
@@ -303,7 +237,7 @@ func TestAPISecretPublisher(t *testing.T) {
 type mockSimpleReferencer struct {
 	resource.Managed
 
-	MockResolveReferences func(context.Context, client.Reader) error
+	MockResolveReferences func(context.Context, client.Reader) error `json:"-"`
 }
 
 func (r *mockSimpleReferencer) ResolveReferences(ctx context.Context, c client.Reader) error {
@@ -377,7 +311,7 @@ func TestResolveReferences(t *testing.T) {
 		"SuccessfulUpdate": {
 			reason: "Should return without error when a value is successfully resolved.",
 			c: &test.MockClient{
-				MockUpdate: test.NewMockUpdateFn(nil),
+				MockPatch: test.NewMockPatchFn(nil),
 			},
 			args: args{
 				ctx: context.Background(),
@@ -391,10 +325,10 @@ func TestResolveReferences(t *testing.T) {
 			},
 			want: nil,
 		},
-		"UpdateError": {
+		"PatchError": {
 			reason: "Should return an error when the managed resource cannot be updated.",
 			c: &test.MockClient{
-				MockUpdate: test.NewMockUpdateFn(errBoom),
+				MockPatch: test.NewMockPatchFn(errBoom),
 			},
 			args: args{
 				ctx: context.Background(),
@@ -406,7 +340,7 @@ func TestResolveReferences(t *testing.T) {
 					},
 				},
 			},
-			want: errors.Wrap(errBoom, errUpdateManaged),
+			want: errors.Wrap(errBoom, errPatchManaged),
 		},
 	}
 
@@ -421,52 +355,139 @@ func TestResolveReferences(t *testing.T) {
 	}
 }
 
-func TestRetryingCriticalAnnotationUpdater(t *testing.T) {
+func TestPrepareJSONMerge(t *testing.T) {
+	type args struct {
+		existing runtime.Object
+		resolved runtime.Object
+	}
+	type want struct {
+		patch string
+		err   error
+	}
 
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"SuccessfulPatch": {
+			reason: "Should successfully compute the JSON merge patch document.",
+			args: args{
+				existing: &fake.Managed{},
+				resolved: &fake.Managed{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "resolved",
+					},
+				},
+			},
+			want: want{
+				patch: `{"name":"resolved"}`,
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			patch, err := prepareJSONMerge(tc.args.existing, tc.args.resolved)
+			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
+				t.Errorf("\n%s\nprepareJSONMerge(...): -wantErr, +gotErr:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.patch, string(patch)); diff != "" {
+				t.Errorf("\n%s\nprepareJSONMerge(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestRetryingCriticalAnnotationUpdater(t *testing.T) {
 	errBoom := errors.New("boom")
 
 	type args struct {
 		ctx context.Context
 		o   client.Object
 	}
+	type want struct {
+		err error
+		o   client.Object
+	}
+
+	setLabels := func(obj client.Object) error {
+		obj.SetLabels(map[string]string{"getcalled": "true"})
+		return nil
+	}
+	objectReturnedByGet := &fake.Managed{}
+	setLabels(objectReturnedByGet)
 
 	cases := map[string]struct {
 		reason string
-		c      client.Client
+		c      *test.MockClient
 		args   args
-		want   error
+		want   want
 	}{
-		"GetError": {
+		"UpdateConflictGetError": {
 			reason: "We should return any error we encounter getting the supplied object",
 			c: &test.MockClient{
-				MockGet: test.NewMockGetFn(errBoom),
+				MockGet: test.NewMockGetFn(errBoom, setLabels),
+				MockUpdate: test.NewMockUpdateFn(kerrors.NewConflict(schema.GroupResource{
+					Group:    "foo.com",
+					Resource: "bars",
+				}, "abc", errBoom)),
 			},
 			args: args{
 				o: &fake.Managed{},
 			},
-			want: errors.Wrap(errBoom, errUpdateCriticalAnnotations),
+			want: want{
+				err: errors.Wrap(errBoom, errUpdateCriticalAnnotations),
+				o:   objectReturnedByGet,
+			},
 		},
 		"UpdateError": {
 			reason: "We should return any error we encounter updating the supplied object",
 			c: &test.MockClient{
-				MockGet:    test.NewMockGetFn(nil),
+				MockGet:    test.NewMockGetFn(nil, setLabels),
 				MockUpdate: test.NewMockUpdateFn(errBoom),
 			},
 			args: args{
 				o: &fake.Managed{},
 			},
-			want: errors.Wrap(errBoom, errUpdateCriticalAnnotations),
+			want: want{
+				err: errors.Wrap(errBoom, errUpdateCriticalAnnotations),
+				o:   &fake.Managed{},
+			},
+		},
+		"SuccessfulGetAfterAConflict": {
+			reason: "A successful get after a conflict should not hide the conflict error and prevent retries",
+			c: &test.MockClient{
+				MockGet: test.NewMockGetFn(nil, setLabels),
+				MockUpdate: test.NewMockUpdateFn(kerrors.NewConflict(schema.GroupResource{
+					Group:    "foo.com",
+					Resource: "bars",
+				}, "abc", errBoom)),
+			},
+			args: args{
+				o: &fake.Managed{},
+			},
+			want: want{
+				err: errors.Wrap(kerrors.NewConflict(schema.GroupResource{
+					Group:    "foo.com",
+					Resource: "bars",
+				}, "abc", errBoom), errUpdateCriticalAnnotations),
+				o: objectReturnedByGet,
+			},
 		},
 		"Success": {
 			reason: "We should return without error if we successfully update our annotations",
 			c: &test.MockClient{
-				MockGet:    test.NewMockGetFn(nil),
+				MockGet:    test.NewMockGetFn(nil, setLabels),
 				MockUpdate: test.NewMockUpdateFn(errBoom),
 			},
 			args: args{
 				o: &fake.Managed{},
 			},
-			want: errors.Wrap(errBoom, errUpdateCriticalAnnotations),
+			want: want{
+				err: errors.Wrap(errBoom, errUpdateCriticalAnnotations),
+				o:   &fake.Managed{},
+			},
 		},
 	}
 
@@ -474,7 +495,10 @@ func TestRetryingCriticalAnnotationUpdater(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			u := NewRetryingCriticalAnnotationUpdater(tc.c)
 			got := u.UpdateCriticalAnnotations(tc.args.ctx, tc.args.o)
-			if diff := cmp.Diff(tc.want, got, test.EquateErrors()); diff != "" {
+			if diff := cmp.Diff(tc.want.err, got, test.EquateErrors()); diff != "" {
+				t.Errorf("\n%s\nu.UpdateCriticalAnnotations(...): -want, +got:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.o, tc.args.o); diff != "" {
 				t.Errorf("\n%s\nu.UpdateCriticalAnnotations(...): -want, +got:\n%s", tc.reason, diff)
 			}
 		})

@@ -18,29 +18,28 @@ package v1
 
 import (
 	corev1 "k8s.io/api/core/v1"
-
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
-	// ResourceCredentialsSecretEndpointKey is the key inside a connection secret for the connection endpoint
+	// ResourceCredentialsSecretEndpointKey is the key inside a connection secret for the connection endpoint.
 	ResourceCredentialsSecretEndpointKey = "endpoint"
-	// ResourceCredentialsSecretPortKey is the key inside a connection secret for the connection port
+	// ResourceCredentialsSecretPortKey is the key inside a connection secret for the connection port.
 	ResourceCredentialsSecretPortKey = "port"
-	// ResourceCredentialsSecretUserKey is the key inside a connection secret for the connection user
+	// ResourceCredentialsSecretUserKey is the key inside a connection secret for the connection user.
 	ResourceCredentialsSecretUserKey = "username"
-	// ResourceCredentialsSecretPasswordKey is the key inside a connection secret for the connection password
+	// ResourceCredentialsSecretPasswordKey is the key inside a connection secret for the connection password.
 	ResourceCredentialsSecretPasswordKey = "password"
-	// ResourceCredentialsSecretCAKey is the key inside a connection secret for the server CA certificate
+	// ResourceCredentialsSecretCAKey is the key inside a connection secret for the server CA certificate.
 	ResourceCredentialsSecretCAKey = "clusterCA"
-	// ResourceCredentialsSecretClientCertKey is the key inside a connection secret for the client certificate
+	// ResourceCredentialsSecretClientCertKey is the key inside a connection secret for the client certificate.
 	ResourceCredentialsSecretClientCertKey = "clientCert"
-	// ResourceCredentialsSecretClientKeyKey is the key inside a connection secret for the client key
+	// ResourceCredentialsSecretClientKeyKey is the key inside a connection secret for the client key.
 	ResourceCredentialsSecretClientKeyKey = "clientKey"
-	// ResourceCredentialsSecretTokenKey is the key inside a connection secret for the bearer token value
+	// ResourceCredentialsSecretTokenKey is the key inside a connection secret for the bearer token value.
 	ResourceCredentialsSecretTokenKey = "token"
-	// ResourceCredentialsSecretKubeconfigKey is the key inside a connection secret for the raw kubeconfig yaml
+	// ResourceCredentialsSecretKubeconfigKey is the key inside a connection secret for the raw kubeconfig yaml.
 	ResourceCredentialsSecretKubeconfigKey = "kubeconfig"
 )
 
@@ -198,14 +197,27 @@ type ResourceSpec struct {
 	// +kubebuilder:default={"name": "default"}
 	ProviderConfigReference *Reference `json:"providerConfigRef,omitempty"`
 
-	// ProviderReference specifies the provider that will be used to create,
-	// observe, update, and delete this managed resource.
-	// Deprecated: Please use ProviderConfigReference, i.e. `providerConfigRef`
-	ProviderReference *Reference `json:"providerRef,omitempty"`
+	// THIS IS A BETA FIELD. It is on by default but can be opted out
+	// through a Crossplane feature flag.
+	// ManagementPolicies specify the array of actions Crossplane is allowed to
+	// take on the managed and external resources.
+	// This field is planned to replace the DeletionPolicy field in a future
+	// release. Currently, both could be set independently and non-default
+	// values would be honored if the feature flag is enabled. If both are
+	// custom, the DeletionPolicy field will be ignored.
+	// See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+	// and this one: https://github.com/crossplane/crossplane/blob/444267e84783136daa93568b364a5f01228cacbe/design/one-pager-ignore-changes.md
+	// +optional
+	// +kubebuilder:default={"*"}
+	ManagementPolicies ManagementPolicies `json:"managementPolicies,omitempty"`
 
 	// DeletionPolicy specifies what will happen to the underlying external
 	// when this managed resource is deleted - either "Delete" or "Orphan" the
 	// external resource.
+	// This field is planned to be deprecated in favor of the ManagementPolicies
+	// field in a future release. Currently, both could be set independently and
+	// non-default values would be honored if the feature flag is enabled.
+	// See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
 	// +optional
 	// +kubebuilder:default=Delete
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
@@ -214,6 +226,7 @@ type ResourceSpec struct {
 // ResourceStatus represents the observed state of a managed resource.
 type ResourceStatus struct {
 	ConditionedStatus `json:",inline"`
+	ObservedStatus    `json:",inline"`
 }
 
 // A CredentialsSource is a source from which provider credentials may be

@@ -55,9 +55,27 @@ func New(opts ...Option) *Unstructured {
 	return c
 }
 
+// +k8s:deepcopy-gen=true
+// +kubebuilder:object:root=true
+
 // An Unstructured composite resource claim.
 type Unstructured struct {
 	unstructured.Unstructured
+}
+
+// Reference to a claim.
+type Reference struct {
+	// APIVersion of the referenced claim.
+	APIVersion string `json:"apiVersion"`
+
+	// Kind of the referenced claim.
+	Kind string `json:"kind"`
+
+	// Name of the referenced claim.
+	Name string `json:"name"`
+
+	// Namespace of the referenced claim.
+	Namespace string `json:"namespace"`
 }
 
 // GetUnstructured returns the underlying *unstructured.Unstructured.
@@ -107,6 +125,20 @@ func (c *Unstructured) SetCompositionRevisionReference(ref *corev1.ObjectReferen
 	_ = fieldpath.Pave(c.Object).SetValue("spec.compositionRevisionRef", ref)
 }
 
+// GetCompositionRevisionSelector of this resource claim.
+func (c *Unstructured) GetCompositionRevisionSelector() *metav1.LabelSelector {
+	out := &metav1.LabelSelector{}
+	if err := fieldpath.Pave(c.Object).GetValueInto("spec.compositionRevisionSelector", out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// SetCompositionRevisionSelector of this resource claim.
+func (c *Unstructured) SetCompositionRevisionSelector(ref *metav1.LabelSelector) {
+	_ = fieldpath.Pave(c.Object).SetValue("spec.compositionRevisionSelector", ref)
+}
+
 // SetCompositionUpdatePolicy of this resource claim.
 func (c *Unstructured) SetCompositionUpdatePolicy(p *xpv1.UpdatePolicy) {
 	_ = fieldpath.Pave(c.Object).SetValue("spec.compositionUpdatePolicy", p)
@@ -122,6 +154,21 @@ func (c *Unstructured) GetCompositionUpdatePolicy() *xpv1.UpdatePolicy {
 	return &out
 }
 
+// SetCompositeDeletePolicy of this resource claim.
+func (c *Unstructured) SetCompositeDeletePolicy(p *xpv1.CompositeDeletePolicy) {
+	_ = fieldpath.Pave(c.Object).SetValue("spec.compositeDeletePolicy", p)
+}
+
+// GetCompositeDeletePolicy of this resource claim.
+func (c *Unstructured) GetCompositeDeletePolicy() *xpv1.CompositeDeletePolicy {
+	p, err := fieldpath.Pave(c.Object).GetString("spec.compositeDeletePolicy")
+	if err != nil {
+		return nil
+	}
+	out := xpv1.CompositeDeletePolicy(p)
+	return &out
+}
+
 // GetResourceReference of this composite resource claim.
 func (c *Unstructured) GetResourceReference() *corev1.ObjectReference {
 	out := &corev1.ObjectReference{}
@@ -134,6 +181,16 @@ func (c *Unstructured) GetResourceReference() *corev1.ObjectReference {
 // SetResourceReference of this composite resource claim.
 func (c *Unstructured) SetResourceReference(ref *corev1.ObjectReference) {
 	_ = fieldpath.Pave(c.Object).SetValue("spec.resourceRef", ref)
+}
+
+// GetReference returns reference to this claim.
+func (c *Unstructured) GetReference() *Reference {
+	return &Reference{
+		APIVersion: c.GetAPIVersion(),
+		Kind:       c.GetKind(),
+		Name:       c.GetName(),
+		Namespace:  c.GetNamespace(),
+	}
 }
 
 // GetWriteConnectionSecretToReference of this composite resource claim.
@@ -195,4 +252,19 @@ func (c *Unstructured) GetConnectionDetailsLastPublishedTime() *metav1.Time {
 // SetConnectionDetailsLastPublishedTime of this composite resource claim.
 func (c *Unstructured) SetConnectionDetailsLastPublishedTime(t *metav1.Time) {
 	_ = fieldpath.Pave(c.Object).SetValue("status.connectionDetails.lastPublishedTime", t)
+}
+
+// SetObservedGeneration of this composite resource claim.
+func (c *Unstructured) SetObservedGeneration(generation int64) {
+	status := &xpv1.ObservedStatus{}
+	_ = fieldpath.Pave(c.Object).GetValueInto("status", status)
+	status.SetObservedGeneration(generation)
+	_ = fieldpath.Pave(c.Object).SetValue("status.observedGeneration", status.ObservedGeneration)
+}
+
+// GetObservedGeneration of this composite resource claim.
+func (c *Unstructured) GetObservedGeneration() int64 {
+	status := &xpv1.ObservedStatus{}
+	_ = fieldpath.Pave(c.Object).GetValueInto("status", status)
+	return status.GetObservedGeneration()
 }

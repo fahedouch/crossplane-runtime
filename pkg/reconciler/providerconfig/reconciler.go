@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package providerconfig provides a reconciler that manages the lifecycle of a
+// ProviderConfig.
 package providerconfig
 
 import (
@@ -109,9 +111,11 @@ func WithRecorder(er event.Recorder) ReconcilerOption {
 // NewReconciler returns a Reconciler of ProviderConfigs.
 func NewReconciler(m manager.Manager, of resource.ProviderConfigKinds, o ...ReconcilerOption) *Reconciler {
 	nc := func() resource.ProviderConfig {
+		//nolint:forcetypeassert // If this isn't a ProviderConfig it's a programming error and we want to panic.
 		return resource.MustCreateObject(of.Config, m.GetScheme()).(resource.ProviderConfig)
 	}
 	nul := func() resource.ProviderConfigUsageList {
+		//nolint:forcetypeassert // If this isn't a ProviderConfigUsage it's a programming error and we want to panic.
 		return resource.MustCreateObject(of.UsageList, m.GetScheme()).(resource.ProviderConfigUsageList)
 	}
 
@@ -177,7 +181,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			if err := r.client.Delete(ctx, pcu); resource.IgnoreNotFound(err) != nil {
 				log.Debug(errDeletePCU, "error", err)
 				r.record.Event(pc, event.Warning(reasonAccount, errors.Wrap(err, errDeletePCU)))
-				return reconcile.Result{RequeueAfter: shortWait}, nil
+				return reconcile.Result{RequeueAfter: shortWait}, nil //nolint:nilerr // Returning err would make us requeue instantly.
 			}
 			users--
 		}

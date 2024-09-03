@@ -84,6 +84,7 @@ func (in *ConnectionSecretMetadata) GetOwnerUID() string {
 }
 
 // SecretStoreType represents a secret store type.
+// +kubebuilder:validation:Enum=Kubernetes;Vault;Plugin
 type SecretStoreType string
 
 const (
@@ -92,8 +93,8 @@ const (
 	// Secrets.
 	SecretStoreKubernetes SecretStoreType = "Kubernetes"
 
-	// SecretStoreVault indicates that secret store type is Vault.
-	SecretStoreVault SecretStoreType = "Vault"
+	// SecretStorePlugin indicates that secret store type is Plugin and will be used with external secret stores.
+	SecretStorePlugin SecretStoreType = "Plugin"
 )
 
 // SecretStoreConfig represents configuration of a Secret Store.
@@ -118,9 +119,27 @@ type SecretStoreConfig struct {
 	// +optional
 	Kubernetes *KubernetesSecretStoreConfig `json:"kubernetes,omitempty"`
 
-	// Vault configures a Vault secret store.
+	// Plugin configures External secret store as a plugin.
 	// +optional
-	Vault *VaultSecretStoreConfig `json:"vault,omitempty"`
+	Plugin *PluginStoreConfig `json:"plugin,omitempty"`
+}
+
+// PluginStoreConfig represents configuration of an External Secret Store.
+type PluginStoreConfig struct {
+	// Endpoint is the endpoint of the gRPC server.
+	Endpoint string `json:"endpoint,omitempty"`
+	// ConfigRef contains store config reference info.
+	ConfigRef Config `json:"configRef,omitempty"`
+}
+
+// Config contains store config reference info.
+type Config struct {
+	// APIVersion of the referenced config.
+	APIVersion string `json:"apiVersion"`
+	// Kind of the referenced config.
+	Kind string `json:"kind"`
+	// Name of the referenced config.
+	Name string `json:"name"`
 }
 
 // KubernetesAuthConfig required to authenticate to a K8s API. It expects
@@ -143,84 +162,4 @@ type KubernetesSecretStoreConfig struct {
 
 	// TODO(turkenh): Support additional identities like
 	// https://github.com/crossplane-contrib/provider-kubernetes/blob/4d722ef914e6964e80e190317daca9872ae98738/apis/v1alpha1/types.go#L34
-}
-
-// VaultAuthMethod represent a Vault authentication method.
-// https://www.vaultproject.io/docs/auth
-type VaultAuthMethod string
-
-const (
-	// VaultAuthToken indicates that "Token Auth" will be used to
-	// authenticate to Vault.
-	// https://www.vaultproject.io/docs/auth/token
-	VaultAuthToken VaultAuthMethod = "Token"
-)
-
-// VaultAuthTokenConfig represents configuration for Vault Token Auth Method.
-// https://www.vaultproject.io/docs/auth/token
-type VaultAuthTokenConfig struct {
-	// Source of the credentials.
-	// +kubebuilder:validation:Enum=None;Secret;Environment;Filesystem
-	Source CredentialsSource `json:"source"`
-
-	// CommonCredentialSelectors provides common selectors for extracting
-	// credentials.
-	CommonCredentialSelectors `json:",inline"`
-}
-
-// VaultAuthConfig required to authenticate to a Vault API.
-type VaultAuthConfig struct {
-	// Method configures which auth method will be used.
-	Method VaultAuthMethod `json:"method"`
-	// Token configures Token Auth for Vault.
-	// +optional
-	Token *VaultAuthTokenConfig `json:"token,omitempty"`
-}
-
-// VaultCABundleConfig represents configuration for configuring a CA bundle.
-type VaultCABundleConfig struct {
-	// Source of the credentials.
-	// +kubebuilder:validation:Enum=None;Secret;Environment;Filesystem
-	Source CredentialsSource `json:"source"`
-
-	// CommonCredentialSelectors provides common selectors for extracting
-	// credentials.
-	CommonCredentialSelectors `json:",inline"`
-}
-
-// VaultKVVersion represent API version of the Vault KV engine
-// https://www.vaultproject.io/docs/secrets/kv
-type VaultKVVersion string
-
-const (
-	// VaultKVVersionV1 indicates that Secret API is KV Secrets Engine Version 1
-	// https://www.vaultproject.io/docs/secrets/kv/kv-v1
-	VaultKVVersionV1 VaultKVVersion = "v1"
-
-	// VaultKVVersionV2 indicates that Secret API is KV Secrets Engine Version 2
-	// https://www.vaultproject.io/docs/secrets/kv/kv-v2
-	VaultKVVersionV2 VaultKVVersion = "v2"
-)
-
-// VaultSecretStoreConfig represents the required configuration for a Vault
-// secret store.
-type VaultSecretStoreConfig struct {
-	// Server is the url of the Vault server, e.g. "https://vault.acme.org"
-	Server string `json:"server"`
-
-	// MountPath is the mount path of the KV secrets engine.
-	MountPath string `json:"mountPath"`
-
-	// Version of the KV Secrets engine of Vault.
-	// https://www.vaultproject.io/docs/secrets/kv
-	// +optional
-	// +kubebuilder:default=v2
-	Version *VaultKVVersion `json:"version,omitempty"`
-
-	// CABundle configures CA bundle for Vault Server.
-	// +optional
-	CABundle *VaultCABundleConfig `json:"caBundle,omitempty"`
-
-	// Auth configures an authentication method for Vault.
-	Auth VaultAuthConfig `json:"auth"`
 }

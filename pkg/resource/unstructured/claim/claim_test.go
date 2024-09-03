@@ -26,9 +26,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 )
+
+var _ client.Object = &Unstructured{}
 
 func TestWithGroupVersionKind(t *testing.T) {
 	gvk := schema.GroupVersionKind{
@@ -42,12 +45,13 @@ func TestWithGroupVersionKind(t *testing.T) {
 	}{
 		"New": {
 			gvk: gvk,
-			want: &Unstructured{Unstructured: unstructured.Unstructured{
-				Object: map[string]any{
-					"apiVersion": "g/v1",
-					"kind":       "k",
+			want: &Unstructured{
+				Unstructured: unstructured.Unstructured{
+					Object: map[string]any{
+						"apiVersion": "g/v1",
+						"kind":       "k",
+					},
 				},
-			},
 			},
 		},
 	}
@@ -141,6 +145,7 @@ func TestCompositionSelector(t *testing.T) {
 		})
 	}
 }
+
 func TestCompositionReference(t *testing.T) {
 	ref := &corev1.ObjectReference{Namespace: "ns", Name: "cool"}
 	cases := map[string]struct {
@@ -191,6 +196,31 @@ func TestCompositionRevisionReference(t *testing.T) {
 	}
 }
 
+func TestCompositionRevisionSelector(t *testing.T) {
+	sel := &metav1.LabelSelector{MatchLabels: map[string]string{"cool": "very"}}
+	cases := map[string]struct {
+		u    *Unstructured
+		set  *metav1.LabelSelector
+		want *metav1.LabelSelector
+	}{
+		"NewRef": {
+			u:    New(),
+			set:  sel,
+			want: sel,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			tc.u.SetCompositionRevisionSelector(tc.set)
+			got := tc.u.GetCompositionRevisionSelector()
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("\nu.GetCompositionRevisionSelector(): -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestCompositionUpdatePolicy(t *testing.T) {
 	p := xpv1.UpdateManual
 	cases := map[string]struct {
@@ -211,6 +241,31 @@ func TestCompositionUpdatePolicy(t *testing.T) {
 			got := tc.u.GetCompositionUpdatePolicy()
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("\nu.GetCompositionUpdatePolicy(): -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestCompositeDeletePolicy(t *testing.T) {
+	p := xpv1.CompositeDeleteBackground
+	cases := map[string]struct {
+		u    *Unstructured
+		set  *xpv1.CompositeDeletePolicy
+		want *xpv1.CompositeDeletePolicy
+	}{
+		"NewRef": {
+			u:    New(),
+			set:  &p,
+			want: &p,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			tc.u.SetCompositeDeletePolicy(tc.set)
+			got := tc.u.GetCompositeDeletePolicy()
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("\nu.GetCompositeDeletePolicy(): -want, +got:\n%s", diff)
 			}
 		})
 	}
@@ -238,6 +293,19 @@ func TestResourceReference(t *testing.T) {
 				t.Errorf("\nu.GetResourceReference(): -want, +got:\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestClaimReference(t *testing.T) {
+	ref := &Reference{Namespace: "ns", Name: "cool", APIVersion: "foo.com/v1", Kind: "Foo"}
+	u := &Unstructured{}
+	u.SetName(ref.Name)
+	u.SetNamespace(ref.Namespace)
+	u.SetAPIVersion(ref.APIVersion)
+	u.SetKind(ref.Kind)
+	got := u.GetReference()
+	if diff := cmp.Diff(ref, got); diff != "" {
+		t.Errorf("\nu.GetClaimReference(): -want, +got:\n%s", diff)
 	}
 }
 
@@ -273,7 +341,7 @@ func TestConnectionDetailsLastPublishedTime(t *testing.T) {
 	// encoding.
 	lores := func(t *metav1.Time) *metav1.Time {
 		out := &metav1.Time{}
-		j, _ := json.Marshal(t)
+		j, _ := json.Marshal(t) //nolint:errchkjson // No encoding issue in practice.
 		_ = json.Unmarshal(j, out)
 		return out
 	}
@@ -296,6 +364,31 @@ func TestConnectionDetailsLastPublishedTime(t *testing.T) {
 			got := tc.u.GetConnectionDetailsLastPublishedTime()
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("\nu.GetConnectionDetailsLastPublishedTime(): -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestObservedGeneration(t *testing.T) {
+	cases := map[string]struct {
+		u    *Unstructured
+		want int64
+	}{
+		"Set": {
+			u: New(func(u *Unstructured) {
+				u.SetObservedGeneration(123)
+			}),
+			want: 123,
+		},
+		"NotFound": {
+			u: New(),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := tc.u.GetObservedGeneration()
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("\nu.GetObservedGeneration(): -want, +got:\n%s", diff)
 			}
 		})
 	}

@@ -50,11 +50,11 @@ func (p *ProviderConfigUsageList) GetObjectKind() schema.ObjectKind {
 
 func (p *ProviderConfigUsageList) DeepCopyObject() runtime.Object {
 	out := &ProviderConfigUsageList{}
-	j, err := json.Marshal(p)
+	j, err := json.Marshal(p) //nolint:musttag // We're just using this to round-trip convert.
 	if err != nil {
 		panic(err)
 	}
-	_ = json.Unmarshal(j, out)
+	_ = json.Unmarshal(j, out) //nolint:musttag // We're just using this to round-trip convert.
 	return out
 }
 
@@ -191,7 +191,7 @@ func TestReconciler(t *testing.T) {
 							}
 							return nil
 						}),
-						MockStatusUpdate: test.NewMockStatusUpdateFn(nil),
+						MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 					},
 					Scheme: fake.SchemeWith(&fake.ProviderConfig{}, &ProviderConfigUsageList{}),
 				},
@@ -280,7 +280,7 @@ func TestReconciler(t *testing.T) {
 						MockGet:          test.NewMockGetFn(nil),
 						MockList:         test.NewMockListFn(nil),
 						MockUpdate:       test.NewMockUpdateFn(nil),
-						MockStatusUpdate: test.NewMockStatusUpdateFn(errBoom),
+						MockStatusUpdate: test.NewMockSubResourceUpdateFn(errBoom),
 					},
 					Scheme: fake.SchemeWith(&fake.ProviderConfig{}, &ProviderConfigUsageList{}),
 				},
@@ -302,7 +302,7 @@ func TestReconciler(t *testing.T) {
 						MockGet:          test.NewMockGetFn(nil),
 						MockList:         test.NewMockListFn(nil),
 						MockUpdate:       test.NewMockUpdateFn(nil),
-						MockStatusUpdate: test.NewMockStatusUpdateFn(nil),
+						MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 					},
 					Scheme: fake.SchemeWith(&fake.ProviderConfig{}, &ProviderConfigUsageList{}),
 				},

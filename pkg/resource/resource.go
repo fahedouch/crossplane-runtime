@@ -18,14 +18,19 @@ package resource
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 
+	"google.golang.org/protobuf/types/known/structpb"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kunstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,6 +38,7 @@ import (
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/pkg/resource/unstructured"
 )
 
 // SecretTypeConnection is the type of Crossplane connection secrets.
@@ -44,6 +50,10 @@ const (
 	ExternalResourceTagKeyKind     = "crossplane-kind"
 	ExternalResourceTagKeyName     = "crossplane-name"
 	ExternalResourceTagKeyProvider = "crossplane-providerconfig"
+
+	errMarshalJSON            = "cannot marshal to JSON"
+	errUnmarshalJSON          = "cannot unmarshal JSON data"
+	errStructFromUnstructured = "cannot create Struct"
 )
 
 // A ManagedKind contains the type metadata for a kind of managed resource.
@@ -79,35 +89,6 @@ type LocalConnectionSecretOwner interface {
 
 	LocalConnectionSecretWriterTo
 	ConnectionDetailsPublisherTo
-}
-
-// A ConnectionPropagator is responsible for propagating information required to
-// connect to a resource.
-// Deprecated: This functionality will be removed soon.
-type ConnectionPropagator interface {
-	PropagateConnection(ctx context.Context, to LocalConnectionSecretOwner, from ConnectionSecretOwner) error
-}
-
-// A ConnectionPropagatorFn is a function that satisfies the
-//  ConnectionPropagator interface.
-type ConnectionPropagatorFn func(ctx context.Context, to LocalConnectionSecretOwner, from ConnectionSecretOwner) error
-
-// A ManagedConnectionPropagator is responsible for propagating information
-// required to connect to a managed resource (for example the connection secret)
-// from the managed resource to a target.
-// Deprecated: This functionality will be removed soon.
-type ManagedConnectionPropagator interface {
-	PropagateConnection(ctx context.Context, o LocalConnectionSecretOwner, mg Managed) error
-}
-
-// A ManagedConnectionPropagatorFn is a function that satisfies the
-// ManagedConnectionPropagator interface.
-type ManagedConnectionPropagatorFn func(ctx context.Context, o LocalConnectionSecretOwner, mg Managed) error
-
-// PropagateConnection information from the supplied managed resource to the
-// supplied resource claim.
-func (fn ManagedConnectionPropagatorFn) PropagateConnection(ctx context.Context, o LocalConnectionSecretOwner, mg Managed) error {
-	return fn(ctx, o, mg)
 }
 
 // LocalConnectionSecretFor creates a connection secret in the namespace of the
@@ -210,35 +191,35 @@ func IgnoreNotFound(err error) error {
 
 // IsAPIError returns true if the given error's type is of Kubernetes API error.
 func IsAPIError(err error) bool {
-	_, ok := err.(kerrors.APIStatus) //nolint: errorlint // we assert against the kerrors.APIStatus Interface which does not implement the error interface
+	_, ok := err.(kerrors.APIStatus)
 	return ok
 }
 
-// IsAPIErrorWrapped returns true if err is a K8s API error, or recursively wraps a K8s API error
+// IsAPIErrorWrapped returns true if err is a K8s API error, or recursively wraps a K8s API error.
 func IsAPIErrorWrapped(err error) bool {
 	return IsAPIError(errors.Cause(err))
 }
 
-// IsConditionTrue returns if condition status is true
+// IsConditionTrue returns if condition status is true.
 func IsConditionTrue(c xpv1.Condition) bool {
 	return c.Status == corev1.ConditionTrue
 }
 
 // An Applicator applies changes to an object.
 type Applicator interface {
-	Apply(context.Context, client.Object, ...ApplyOption) error
+	Apply(ctx context.Context, obj client.Object, o ...ApplyOption) error
 }
 
 type shouldRetryFunc func(error) bool
 
-// An ApplicatorWithRetry applies changes to an object, retrying on transient failures
+// An ApplicatorWithRetry applies changes to an object, retrying on transient failures.
 type ApplicatorWithRetry struct {
 	Applicator
 	shouldRetry shouldRetryFunc
 	backoff     wait.Backoff
 }
 
-// Apply invokes nested Applicator's Apply retrying on designated errors
+// Apply invokes nested Applicator's Apply retrying on designated errors.
 func (awr *ApplicatorWithRetry) Apply(ctx context.Context, c client.Object, opts ...ApplyOption) error {
 	return retry.OnError(awr.backoff, awr.shouldRetry, func() error {
 		return awr.Applicator.Apply(ctx, c, opts...)
@@ -247,7 +228,8 @@ func (awr *ApplicatorWithRetry) Apply(ctx context.Context, c client.Object, opts
 
 // NewApplicatorWithRetry returns an ApplicatorWithRetry for the specified
 // applicator and with the specified retry function.
-//   If backoff is nil, then retry.DefaultRetry is used as the default.
+//
+//	If backoff is nil, then retry.DefaultRetry is used as the default.
 func NewApplicatorWithRetry(applicator Applicator, shouldRetry shouldRetryFunc, backoff *wait.Backoff) *ApplicatorWithRetry {
 	result := &ApplicatorWithRetry{
 		Applicator:  applicator,
@@ -300,7 +282,7 @@ func (e errNotControllable) NotControllable() bool {
 // resource is not controllable - i.e. that it another resource is not and may
 // not become its controller reference.
 func IsNotControllable(err error) bool {
-	_, ok := err.(interface { //nolint: errorlint // Skip errorlint for interface type
+	_, ok := err.(interface {
 		NotControllable() bool
 	})
 	return ok
@@ -313,14 +295,17 @@ func IsNotControllable(err error) bool {
 // cannot be controlled by the supplied UID.
 func MustBeControllableBy(u types.UID) ApplyOption {
 	return func(_ context.Context, current, _ runtime.Object) error {
-		c := metav1.GetControllerOf(current.(metav1.Object))
+		mo, ok := current.(metav1.Object)
+		if !ok {
+			return errNotControllable{errors.Errorf("existing object is missing object metadata")}
+		}
+		c := metav1.GetControllerOf(mo)
 		if c == nil {
 			return nil
 		}
 
 		if c.UID != u {
 			return errNotControllable{errors.Errorf("existing object is not controlled by UID %q", u)}
-
 		}
 		return nil
 	}
@@ -340,7 +325,10 @@ func MustBeControllableBy(u types.UID) ApplyOption {
 // secret or cannot be controlled by the supplied UID.
 func ConnectionSecretMustBeControllableBy(u types.UID) ApplyOption {
 	return func(_ context.Context, current, _ runtime.Object) error {
-		s := current.(*corev1.Secret)
+		s, ok := current.(*corev1.Secret)
+		if !ok {
+			return errors.New("current resource is not a Secret")
+		}
 		c := metav1.GetControllerOf(s)
 
 		switch {
@@ -362,7 +350,7 @@ func (e errNotAllowed) NotAllowed() bool {
 	return true
 }
 
-// NewNotAllowed returns a new NotAllowed error
+// NewNotAllowed returns a new NotAllowed error.
 func NewNotAllowed(message string) error {
 	return errNotAllowed{error: errors.New(message)}
 }
@@ -370,7 +358,7 @@ func NewNotAllowed(message string) error {
 // IsNotAllowed returns true if the supplied error indicates that an operation
 // was not allowed.
 func IsNotAllowed(err error) bool {
-	_, ok := err.(interface { //nolint: errorlint // Skip errorlint for interface type
+	_, ok := err.(interface {
 		NotAllowed() bool
 	})
 	return ok
@@ -389,12 +377,18 @@ func AllowUpdateIf(fn func(current, desired runtime.Object) bool) ApplyOption {
 	}
 }
 
-// Apply changes to the supplied object. The object will be created if it does
-// not exist, or patched if it does.
-//
-// Deprecated: use APIPatchingApplicator instead.
-func Apply(ctx context.Context, c client.Client, o client.Object, ao ...ApplyOption) error {
-	return NewAPIPatchingApplicator(c).Apply(ctx, o, ao...)
+// StoreCurrentRV stores the resource version of the current object in the
+// supplied string pointer. This is useful to detect whether the Apply call
+// was a no-op.
+func StoreCurrentRV(origRV *string) ApplyOption {
+	return func(_ context.Context, current, _ runtime.Object) error {
+		mo, ok := current.(metav1.Object)
+		if !ok {
+			return errors.New("current resource is missing object metadata")
+		}
+		*origRV = mo.GetResourceVersion()
+		return nil
+	}
 }
 
 // GetExternalTags returns the identifying tags to be used to tag the external
@@ -405,13 +399,64 @@ func GetExternalTags(mg Managed) map[string]string {
 		ExternalResourceTagKeyName: mg.GetName(),
 	}
 
-	switch {
-	case mg.GetProviderConfigReference() != nil && mg.GetProviderConfigReference().Name != "":
+	if mg.GetProviderConfigReference() != nil && mg.GetProviderConfigReference().Name != "" {
 		tags[ExternalResourceTagKeyProvider] = mg.GetProviderConfigReference().Name
-	// TODO(muvaf): Remove the branch once Provider type has been removed from
-	// everywhere.
-	case mg.GetProviderReference() != nil && mg.GetProviderReference().Name != "":
-		tags[ExternalResourceTagKeyProvider] = mg.GetProviderReference().Name
 	}
 	return tags
+}
+
+// DefaultFirstN is the default number of names to return in FirstNAndSomeMore.
+const DefaultFirstN = 3
+
+// FirstNAndSomeMore returns a string that contains the first n names in the
+// supplied slice, followed by ", and <count> more" if there are more than n.
+// The slice is not sorted, i.e. the caller must make sure the order is stable
+// e.g. when using this in conditions.
+func FirstNAndSomeMore(n int, names []string) string {
+	if n <= 0 {
+		return fmt.Sprintf("%d", len(names))
+	}
+	if len(names) > n {
+		return fmt.Sprintf("%s, and %d more", strings.Join(names[:n], ", "), len(names)-n)
+	}
+	if len(names) == n {
+		return fmt.Sprintf("%s, and %s", strings.Join(names[:n-1], ", "), names[n-1])
+	}
+	return strings.Join(names, ", ")
+}
+
+// StableNAndSomeMore is like FirstNAndSomeMore, but sorts the names before.
+// The input slice is not modified.
+func StableNAndSomeMore(n int, names []string) string {
+	cpy := make([]string, len(names))
+	copy(cpy, names)
+	sort.Strings(cpy)
+	return FirstNAndSomeMore(n, cpy)
+}
+
+// AsProtobufStruct converts the given object to a structpb.Struct for usage with gRPC
+// connections.
+// Copied from:
+// https://github.com/crossplane/crossplane/blob/release-1.16/internal/controller/apiextensions/composite/composition_functions.go#L761
+func AsProtobufStruct(o runtime.Object) (*structpb.Struct, error) {
+	// If the supplied object is *Unstructured we don't need to round-trip.
+	if u, ok := o.(*kunstructured.Unstructured); ok {
+		s, err := structpb.NewStruct(u.Object)
+		return s, errors.Wrap(err, errStructFromUnstructured)
+	}
+
+	// If the supplied object wraps *Unstructured we don't need to round-trip.
+	if w, ok := o.(unstructured.Wrapper); ok {
+		s, err := structpb.NewStruct(w.GetUnstructured().Object)
+		return s, errors.Wrap(err, errStructFromUnstructured)
+	}
+
+	// Fall back to a JSON round-trip.
+	b, err := json.Marshal(o)
+	if err != nil {
+		return nil, errors.Wrap(err, errMarshalJSON)
+	}
+
+	s := &structpb.Struct{}
+	return s, errors.Wrap(s.UnmarshalJSON(b), errUnmarshalJSON)
 }

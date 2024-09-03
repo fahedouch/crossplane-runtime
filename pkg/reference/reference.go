@@ -14,13 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package reference contains utilities for working with cross-resource
+// references.
 package reference
 
 import (
 	"context"
+	"strconv"
 
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
-
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -50,6 +52,22 @@ func FromPtrValue(v *string) string {
 	return *v
 }
 
+// FromFloatPtrValue adapts a float pointer field for use as a CurrentValue.
+func FromFloatPtrValue(v *float64) string {
+	if v == nil {
+		return ""
+	}
+	return strconv.FormatFloat(*v, 'f', 0, 64)
+}
+
+// FromIntPtrValue adapts an int pointer field for use as a CurrentValue.
+func FromIntPtrValue(v *int64) string {
+	if v == nil {
+		return ""
+	}
+	return strconv.FormatInt(*v, 10)
+}
+
 // ToPtrValue adapts a ResolvedValue for use as a string pointer field.
 func ToPtrValue(v string) *string {
 	if v == "" {
@@ -58,15 +76,57 @@ func ToPtrValue(v string) *string {
 	return &v
 }
 
+// ToFloatPtrValue adapts a ResolvedValue for use as a float64 pointer field.
+func ToFloatPtrValue(v string) *float64 {
+	if v == "" {
+		return nil
+	}
+	vParsed, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return nil
+	}
+	return &vParsed
+}
+
+// ToIntPtrValue adapts a ResolvedValue for use as an int pointer field.
+func ToIntPtrValue(v string) *int64 {
+	if v == "" {
+		return nil
+	}
+	vParsed, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &vParsed
+}
+
 // FromPtrValues adapts a slice of string pointer fields for use as CurrentValues.
 // NOTE: Do not use this utility function unless you have to.
 // Using pointer slices does not adhere to our current API practices.
 // The current use case is where generated code creates reference-able fields in a provider which are
-// string pointers and need to be resolved as part of `ResolveMultiple`
+// string pointers and need to be resolved as part of `ResolveMultiple`.
 func FromPtrValues(v []*string) []string {
-	var res = make([]string, len(v))
-	for i := 0; i < len(v); i++ {
+	res := make([]string, len(v))
+	for i := range len(v) {
 		res[i] = FromPtrValue(v[i])
+	}
+	return res
+}
+
+// FromFloatPtrValues adapts a slice of float64 pointer fields for use as CurrentValues.
+func FromFloatPtrValues(v []*float64) []string {
+	res := make([]string, len(v))
+	for i := range len(v) {
+		res[i] = FromFloatPtrValue(v[i])
+	}
+	return res
+}
+
+// FromIntPtrValues adapts a slice of int64 pointer fields for use as CurrentValues.
+func FromIntPtrValues(v []*int64) []string {
+	res := make([]string, len(v))
+	for i := range len(v) {
+		res[i] = FromIntPtrValue(v[i])
 	}
 	return res
 }
@@ -75,11 +135,29 @@ func FromPtrValues(v []*string) []string {
 // NOTE: Do not use this utility function unless you have to.
 // Using pointer slices does not adhere to our current API practices.
 // The current use case is where generated code creates reference-able fields in a provider which are
-// string pointers and need to be resolved as part of `ResolveMultiple`
+// string pointers and need to be resolved as part of `ResolveMultiple`.
 func ToPtrValues(v []string) []*string {
-	var res = make([]*string, len(v))
-	for i := 0; i < len(v); i++ {
+	res := make([]*string, len(v))
+	for i := range len(v) {
 		res[i] = ToPtrValue(v[i])
+	}
+	return res
+}
+
+// ToFloatPtrValues adapts ResolvedValues for use as a slice of float64 pointer fields.
+func ToFloatPtrValues(v []string) []*float64 {
+	res := make([]*float64, len(v))
+	for i := range len(v) {
+		res[i] = ToFloatPtrValue(v[i])
+	}
+	return res
+}
+
+// ToIntPtrValues adapts ResolvedValues for use as a slice of int64 pointer fields.
+func ToIntPtrValues(v []string) []*int64 {
+	res := make([]*int64, len(v))
+	for i := range len(v) {
+		res[i] = ToIntPtrValue(v[i])
 	}
 	return res
 }
@@ -272,13 +350,12 @@ func (r *APIResolver) Resolve(ctx context.Context, req ResolutionRequest) (Resol
 
 	// We couldn't resolve anything.
 	return ResolutionResponse{}, getResolutionError(req.Selector.Policy, errors.New(errNoMatches))
-
 }
 
 // ResolveMultiple resolves the supplied MultiResolutionRequest. The returned
 // MultiResolutionResponse always contains valid values unless an error was
 // returned.
-func (r *APIResolver) ResolveMultiple(ctx context.Context, req MultiResolutionRequest) (MultiResolutionResponse, error) { // nolint: gocyclo
+func (r *APIResolver) ResolveMultiple(ctx context.Context, req MultiResolutionRequest) (MultiResolutionResponse, error) { //nolint: gocyclo // Only at 11.
 	// Return early if from is being deleted, or the request is a no-op.
 	if meta.WasDeleted(r.from) || req.IsNoOp() {
 		return MultiResolutionResponse{ResolvedValues: req.CurrentValues, ResolvedReferences: req.References}, nil

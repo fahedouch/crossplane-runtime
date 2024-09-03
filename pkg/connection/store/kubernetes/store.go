@@ -14,10 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package kubernetes implements a secret store backed by Kubernetes Secrets.
 package kubernetes
 
 import (
 	"context"
+	"crypto/tls"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -55,7 +57,7 @@ type SecretStore struct {
 }
 
 // NewSecretStore returns a new Kubernetes SecretStore.
-func NewSecretStore(ctx context.Context, local client.Client, cfg v1.SecretStoreConfig) (*SecretStore, error) {
+func NewSecretStore(ctx context.Context, local client.Client, _ *tls.Config, cfg v1.SecretStoreConfig) (*SecretStore, error) {
 	kube, err := buildClient(ctx, local, cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, errBuildClient)
@@ -91,7 +93,7 @@ func buildClient(ctx context.Context, local client.Client, cfg v1.SecretStoreCon
 // ReadKeyValues reads and returns key value pairs for a given Kubernetes Secret.
 func (ss *SecretStore) ReadKeyValues(ctx context.Context, n store.ScopedName, s *store.Secret) error {
 	ks := &corev1.Secret{}
-	if err := ss.client.Get(ctx, types.NamespacedName{Name: n.Name, Namespace: ss.namespaceForSecret(n)}, ks); err != nil {
+	if err := ss.client.Get(ctx, types.NamespacedName{Name: n.Name, Namespace: ss.namespaceForSecret(n)}, ks); resource.IgnoreNotFound(err) != nil {
 		return errors.Wrap(err, errGetSecret)
 	}
 	s.Data = ks.Data
@@ -126,7 +128,7 @@ func (ss *SecretStore) WriteKeyValues(ctx context.Context, s *store.Secret, wo .
 	ao = append(ao, resource.AllowUpdateIf(func(current, desired runtime.Object) bool {
 		// We consider the update to be a no-op and don't allow it if the
 		// current and existing secret data are identical.
-		return !cmp.Equal(current.(*corev1.Secret).Data, desired.(*corev1.Secret).Data, cmpopts.EquateEmpty())
+		return !cmp.Equal(current.(*corev1.Secret).Data, desired.(*corev1.Secret).Data, cmpopts.EquateEmpty()) //nolint:forcetypeassert // Will always be a secret.
 	}))
 
 	err := ss.client.Apply(ctx, ks, ao...)
@@ -195,8 +197,8 @@ func applyOptions(wo ...store.WriteOption) []resource.ApplyOption {
 	for i := range wo {
 		o := wo[i]
 		ao[i] = func(ctx context.Context, current, desired runtime.Object) error {
-			currentSecret := current.(*corev1.Secret)
-			desiredSecret := desired.(*corev1.Secret)
+			currentSecret := current.(*corev1.Secret) //nolint:forcetypeassert // Will always be a secret.
+			desiredSecret := desired.(*corev1.Secret) //nolint:forcetypeassert // Will always be a secret.
 
 			cs := &store.Secret{
 				ScopedName: store.ScopedName{
@@ -210,6 +212,19 @@ func applyOptions(wo ...store.WriteOption) []resource.ApplyOption {
 				},
 				Data: currentSecret.Data,
 			}
+
+			// NOTE(turkenh): With External Secret Stores, we are using a special label/tag with key
+			// "secret.crossplane.io/owner-uid" to track the owner of the connection secret. However, different from
+			// other Secret Store implementations, Kubernetes Store uses metadata.OwnerReferences for this purpose and
+			// we don't want it to appear in the labels of the secret additionally.
+			// Here we are adding the owner label to the internal representation of the current secret as part of
+			// converting store.WriteOption's to k8s resource.ApplyOption's, so that our generic store.WriteOptions
+			// checking secret owner could work as expected.
+			// Fixes: https://github.com/crossplane/crossplane/issues/3520
+			if len(currentSecret.GetOwnerReferences()) > 0 {
+				cs.Metadata.SetOwnerUID(currentSecret.GetOwnerReferences()[0].UID)
+			}
+
 			ds := &store.Secret{
 				ScopedName: store.ScopedName{
 					Name:  desiredSecret.Name,

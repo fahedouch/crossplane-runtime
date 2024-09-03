@@ -24,7 +24,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/pkg/fieldpath"
+	"github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/claim"
 )
 
 // An Option modifies an unstructured composite resource.
@@ -54,6 +56,9 @@ func New(opts ...Option) *Unstructured {
 	}
 	return c
 }
+
+// +k8s:deepcopy-gen=true
+// +kubebuilder:object:root=true
 
 // An Unstructured composed resource.
 type Unstructured struct {
@@ -107,6 +112,20 @@ func (c *Unstructured) SetCompositionRevisionReference(ref *corev1.ObjectReferen
 	_ = fieldpath.Pave(c.Object).SetValue("spec.compositionRevisionRef", ref)
 }
 
+// GetCompositionRevisionSelector of this resource claim.
+func (c *Unstructured) GetCompositionRevisionSelector() *metav1.LabelSelector {
+	out := &metav1.LabelSelector{}
+	if err := fieldpath.Pave(c.Object).GetValueInto("spec.compositionRevisionSelector", out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// SetCompositionRevisionSelector of this resource claim.
+func (c *Unstructured) SetCompositionRevisionSelector(sel *metav1.LabelSelector) {
+	_ = fieldpath.Pave(c.Object).SetValue("spec.compositionRevisionSelector", sel)
+}
+
 // SetCompositionUpdatePolicy of this Composite resource.
 func (c *Unstructured) SetCompositionUpdatePolicy(p *xpv1.UpdatePolicy) {
 	_ = fieldpath.Pave(c.Object).SetValue("spec.compositionUpdatePolicy", p)
@@ -123,8 +142,8 @@ func (c *Unstructured) GetCompositionUpdatePolicy() *xpv1.UpdatePolicy {
 }
 
 // GetClaimReference of this Composite resource.
-func (c *Unstructured) GetClaimReference() *corev1.ObjectReference {
-	out := &corev1.ObjectReference{}
+func (c *Unstructured) GetClaimReference() *claim.Reference {
+	out := &claim.Reference{}
 	if err := fieldpath.Pave(c.Object).GetValueInto("spec.claimRef", out); err != nil {
 		return nil
 	}
@@ -132,7 +151,7 @@ func (c *Unstructured) GetClaimReference() *corev1.ObjectReference {
 }
 
 // SetClaimReference of this Composite resource.
-func (c *Unstructured) SetClaimReference(ref *corev1.ObjectReference) {
+func (c *Unstructured) SetClaimReference(ref *claim.Reference) {
 	_ = fieldpath.Pave(c.Object).SetValue("spec.claimRef", ref)
 }
 
@@ -205,6 +224,14 @@ func (c *Unstructured) SetConditions(conditions ...xpv1.Condition) {
 	_ = fieldpath.Pave(c.Object).SetValue("status.conditions", conditioned.Conditions)
 }
 
+// GetConditions of this Composite resource.
+func (c *Unstructured) GetConditions() []xpv1.Condition {
+	conditioned := xpv1.ConditionedStatus{}
+	// The path is directly `status` because conditions are inline.
+	_ = fieldpath.Pave(c.Object).GetValueInto("status", &conditioned)
+	return conditioned.Conditions
+}
+
 // GetConnectionDetailsLastPublishedTime of this Composite resource.
 func (c *Unstructured) GetConnectionDetailsLastPublishedTime() *metav1.Time {
 	out := &metav1.Time{}
@@ -217,4 +244,71 @@ func (c *Unstructured) GetConnectionDetailsLastPublishedTime() *metav1.Time {
 // SetConnectionDetailsLastPublishedTime of this Composite resource.
 func (c *Unstructured) SetConnectionDetailsLastPublishedTime(t *metav1.Time) {
 	_ = fieldpath.Pave(c.Object).SetValue("status.connectionDetails.lastPublishedTime", t)
+}
+
+// GetEnvironmentConfigReferences of this Composite resource.
+func (c *Unstructured) GetEnvironmentConfigReferences() []corev1.ObjectReference {
+	out := &[]corev1.ObjectReference{}
+	_ = fieldpath.Pave(c.Object).GetValueInto("spec.environmentConfigRefs", out)
+	return *out
+}
+
+// SetEnvironmentConfigReferences of this Composite resource.
+func (c *Unstructured) SetEnvironmentConfigReferences(refs []corev1.ObjectReference) {
+	empty := corev1.ObjectReference{}
+	filtered := make([]corev1.ObjectReference, 0, len(refs))
+	for _, ref := range refs {
+		// TODO(negz): Ask muvaf to explain what this is working around. :)
+		// TODO(muvaf): temporary workaround.
+		if ref.String() == empty.String() {
+			continue
+		}
+		filtered = append(filtered, ref)
+	}
+	_ = fieldpath.Pave(c.Object).SetValue("spec.environmentConfigRefs", filtered)
+}
+
+// SetObservedGeneration of this composite resource claim.
+func (c *Unstructured) SetObservedGeneration(generation int64) {
+	status := &xpv1.ObservedStatus{}
+	_ = fieldpath.Pave(c.Object).GetValueInto("status", status)
+	status.SetObservedGeneration(generation)
+	_ = fieldpath.Pave(c.Object).SetValue("status.observedGeneration", status.ObservedGeneration)
+}
+
+// GetObservedGeneration of this composite resource claim.
+func (c *Unstructured) GetObservedGeneration() int64 {
+	status := &xpv1.ObservedStatus{}
+	_ = fieldpath.Pave(c.Object).GetValueInto("status", status)
+	return status.GetObservedGeneration()
+}
+
+// SetClaimConditionTypes of this Composite resource. You cannot set system
+// condition types such as Ready, Synced or Healthy as claim conditions.
+func (c *Unstructured) SetClaimConditionTypes(in ...xpv1.ConditionType) error {
+	ts := c.GetClaimConditionTypes()
+	m := make(map[xpv1.ConditionType]bool, len(ts))
+	for _, t := range ts {
+		m[t] = true
+	}
+
+	for _, t := range in {
+		if xpv1.IsSystemConditionType(t) {
+			return errors.Errorf("cannot set system condition %s as a claim condition", t)
+		}
+		if m[t] {
+			continue
+		}
+		m[t] = true
+		ts = append(ts, t)
+	}
+	_ = fieldpath.Pave(c.Object).SetValue("status.claimConditionTypes", ts)
+	return nil
+}
+
+// GetClaimConditionTypes of this Composite resource.
+func (c *Unstructured) GetClaimConditionTypes() []xpv1.ConditionType {
+	cs := []xpv1.ConditionType{}
+	_ = fieldpath.Pave(c.Object).GetValueInto("status.claimConditionTypes", &cs)
+	return cs
 }

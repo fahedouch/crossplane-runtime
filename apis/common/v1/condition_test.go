@@ -57,6 +57,15 @@ func TestConditionEqual(t *testing.T) {
 			b:    Condition{Message: "uncool"},
 			want: false,
 		},
+		"CheckReconcilePaused": {
+			a: ReconcilePaused(),
+			b: Condition{
+				Type:   TypeSynced,
+				Status: corev1.ConditionFalse,
+				Reason: ReasonReconcilePaused,
+			},
+			want: true,
+		},
 	}
 
 	for name, tc := range cases {
@@ -215,6 +224,67 @@ func TestConditionWithMessage(t *testing.T) {
 
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("a.Equal(b): -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestConditionWithObservedGeneration(t *testing.T) {
+	cases := map[string]struct {
+		c                  Condition
+		observedGeneration int64
+		want               Condition
+	}{
+		"Added": {
+			c:                  Condition{Type: TypeReady, Reason: ReasonUnavailable},
+			observedGeneration: 10,
+			want:               Condition{Type: TypeReady, Reason: ReasonUnavailable, ObservedGeneration: 10},
+		},
+		"Changed": {
+			c:                  Condition{Type: TypeReady, Reason: ReasonUnavailable, ObservedGeneration: 3},
+			observedGeneration: 10,
+			want:               Condition{Type: TypeReady, Reason: ReasonUnavailable, ObservedGeneration: 10},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := tc.c.WithObservedGeneration(tc.observedGeneration)
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("a.Equal(b): -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestIsSystemConditionType(t *testing.T) {
+	cases := map[string]struct {
+		c    Condition
+		want bool
+	}{
+		"SystemReady": {
+			c:    Condition{Type: ConditionType("Ready")},
+			want: true,
+		},
+		"SystemSynced": {
+			c:    Condition{Type: ConditionType("Synced")},
+			want: true,
+		},
+		"SystemHealthy": {
+			c:    Condition{Type: ConditionType("Healthy")},
+			want: true,
+		},
+		"Custom": {
+			c:    Condition{Type: ConditionType("Custom")},
+			want: false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.want, IsSystemConditionType(tc.c.Type)); diff != "" {
+				t.Errorf("IsSystemConditionType(tc.c.Type): -want, +got:\n%s", diff)
 			}
 		})
 	}

@@ -14,6 +14,9 @@
  limitations under the License.
 */
 
+// Package fake implements a fake secret store.
+//
+//nolint:musttag // We only use JSON to round-trip convert these mocks.
 package fake
 
 import (
@@ -28,7 +31,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/connection/store"
 )
 
-// SecretStore is a fake SecretStore
+// SecretStore is a fake SecretStore.
 type SecretStore struct {
 	ReadKeyValuesFn   func(ctx context.Context, n store.ScopedName, s *store.Secret) error
 	WriteKeyValuesFn  func(ctx context.Context, s *store.Secret, wo ...store.WriteOption) (bool, error)
@@ -58,7 +61,7 @@ type StoreConfig struct {
 	v1.ConditionedStatus
 }
 
-// GetStoreConfig returns SecretStoreConfig
+// GetStoreConfig returns SecretStoreConfig.
 func (s *StoreConfig) GetStoreConfig() v1.SecretStoreConfig {
 	return s.Config
 }
@@ -68,7 +71,7 @@ func (s *StoreConfig) GetObjectKind() schema.ObjectKind {
 	return schema.EmptyObjectKind
 }
 
-// DeepCopyObject returns a copy of the object as runtime.Object
+// DeepCopyObject returns a copy of the object as runtime.Object.
 func (s *StoreConfig) DeepCopyObject() runtime.Object {
 	out := &StoreConfig{}
 	j, err := json.Marshal(s)

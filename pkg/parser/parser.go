@@ -14,13 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package parser implements a parser for Crossplane packages.
 package parser
 
 import (
 	"bufio"
 	"context"
 	"io"
-	"io/ioutil"
 	"strings"
 	"unicode"
 
@@ -33,6 +33,15 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
 )
+
+// Lintable defines the common API for lintable packages.
+type Lintable interface {
+	// GetMeta returns metadata objects of the lintable package, such as
+	// Provider, Configuration or Function.
+	GetMeta() []runtime.Object
+	// GetObjects returns objects of the lintable package.
+	GetObjects() []runtime.Object
+}
 
 // AnnotatedReadCloser is a wrapper around io.ReadCloser that allows
 // implementations to supply additional information about data that is read.
@@ -70,7 +79,7 @@ func (p *Package) GetObjects() []runtime.Object {
 
 // Parser is a package parser.
 type Parser interface {
-	Parse(context.Context, io.ReadCloser) (*Package, error)
+	Parse(ctx context.Context, rc io.ReadCloser) (*Package, error)
 }
 
 // PackageParser is a Parser implementation for parsing packages.
@@ -91,7 +100,7 @@ func New(meta, obj ObjectCreaterTyper) *PackageParser {
 // decode objects recognized by the meta scheme, then attempts to decode objects
 // recognized by the object scheme. Objects not recognized by either scheme
 // return an error rather than being skipped.
-func (p *PackageParser) Parse(ctx context.Context, reader io.ReadCloser) (*Package, error) { //nolint:gocyclo
+func (p *PackageParser) Parse(_ context.Context, reader io.ReadCloser) (*Package, error) {
 	pkg := NewPackage()
 	if reader == nil {
 		return pkg, nil
@@ -101,27 +110,24 @@ func (p *PackageParser) Parse(ctx context.Context, reader io.ReadCloser) (*Packa
 	dm := json.NewSerializerWithOptions(json.DefaultMetaFactory, p.metaScheme, p.metaScheme, json.SerializerOptions{Yaml: true})
 	do := json.NewSerializerWithOptions(json.DefaultMetaFactory, p.objScheme, p.objScheme, json.SerializerOptions{Yaml: true})
 	for {
-		bytes, err := yr.Read()
+		content, err := yr.Read()
 		if err != nil && !errors.Is(err, io.EOF) {
 			return pkg, err
 		}
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		if len(bytes) == 0 {
+		if isEmptyYAML(content) {
 			continue
 		}
-		if isWhiteSpace(bytes) {
-			continue
-		}
-		m, _, err := dm.Decode(bytes, nil, nil)
+		m, _, err := dm.Decode(content, nil, nil)
 		if err != nil {
 			// NOTE(hasheddan): we only try to decode with object scheme if the
 			// error is due the object not being registered in the meta scheme.
 			if !runtime.IsNotRegisteredError(err) {
 				return pkg, annotateErr(err, reader)
 			}
-			o, _, err := do.Decode(bytes, nil, nil)
+			o, _, err := do.Decode(content, nil, nil)
 			if err != nil {
 				return pkg, annotateErr(err, reader)
 			}
@@ -133,17 +139,19 @@ func (p *PackageParser) Parse(ctx context.Context, reader io.ReadCloser) (*Packa
 	return pkg, nil
 }
 
-// isWhiteSpace determines whether the passed in bytes are all unicode white
-// space.
-func isWhiteSpace(bytes []byte) bool {
-	empty := true
-	for _, b := range bytes {
-		if !unicode.IsSpace(rune(b)) {
-			empty = false
-			break
+// isEmptyYAML checks whether the provided YAML can be considered empty. This
+// is useful for filtering out empty YAML documents that would otherwise
+// cause issues when decoded.
+func isEmptyYAML(y []byte) bool {
+	for _, line := range strings.Split(string(y), "\n") {
+		trimmed := strings.TrimLeftFunc(line, unicode.IsSpace)
+		// We don't want to return an empty document with only separators that
+		// have nothing in-between.
+		if trimmed != "" && trimmed != "---" && trimmed != "..." && !strings.HasPrefix(trimmed, "#") {
+			return false
 		}
 	}
-	return empty
+	return true
 }
 
 // annotateErr annotates an error if the reader is an AnnotatedReadCloser.
@@ -160,7 +168,7 @@ type BackendOption func(Backend)
 
 // Backend provides a source for a parser.
 type Backend interface {
-	Init(context.Context, ...BackendOption) (io.ReadCloser, error)
+	Init(ctx context.Context, o ...BackendOption) (io.ReadCloser, error)
 }
 
 // PodLogBackend is a parser backend that uses Kubernetes pod logs as source.
@@ -234,7 +242,7 @@ func NewNopBackend(...BackendOption) *NopBackend {
 }
 
 // Init initializes a NopBackend.
-func (p *NopBackend) Init(ctx context.Context, bo ...BackendOption) (io.ReadCloser, error) {
+func (p *NopBackend) Init(_ context.Context, _ ...BackendOption) (io.ReadCloser, error) {
 	return nil, nil
 }
 
@@ -257,7 +265,7 @@ func NewFsBackend(fs afero.Fs, bo ...BackendOption) *FsBackend {
 }
 
 // Init initializes an FsBackend.
-func (p *FsBackend) Init(ctx context.Context, bo ...BackendOption) (io.ReadCloser, error) {
+func (p *FsBackend) Init(_ context.Context, bo ...BackendOption) (io.ReadCloser, error) {
 	for _, o := range bo {
 		o(p)
 	}
@@ -299,9 +307,9 @@ func NewEchoBackend(echo string) Backend {
 }
 
 // Init initializes an EchoBackend.
-func (p *EchoBackend) Init(ctx context.Context, bo ...BackendOption) (io.ReadCloser, error) {
+func (p *EchoBackend) Init(_ context.Context, bo ...BackendOption) (io.ReadCloser, error) {
 	for _, o := range bo {
 		o(p)
 	}
-	return ioutil.NopCloser(strings.NewReader(p.echo)), nil
+	return io.NopCloser(strings.NewReader(p.echo)), nil
 }

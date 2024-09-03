@@ -19,7 +19,7 @@ package fieldpath
 import (
 	"reflect"
 
-	"github.com/imdario/mergo"
+	"dario.cat/mergo"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
@@ -30,7 +30,7 @@ const (
 )
 
 // MergeValue of the receiver p at the specified field path with the supplied
-// value according to supplied merge options
+// value according to supplied merge options.
 func (p *Paved) MergeValue(path string, value any, mo *xpv1.MergeOptions) error {
 	dst, err := p.GetValue(path)
 	if IsNotFound(err) || mo == nil {
@@ -93,7 +93,7 @@ func removeSourceDuplicates(dst, src any) any {
 	}
 
 	result := reflect.New(sliceSrc.Type()).Elem() // we will not modify src
-	for i := 0; i < sliceSrc.Len(); i++ {
+	for i := range sliceSrc.Len() {
 		itemSrc := sliceSrc.Index(i)
 		found := false
 		for j := 0; j < sliceDst.Len() && !found; j++ {

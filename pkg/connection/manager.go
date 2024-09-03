@@ -14,10 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package connection provides utilities for working with connection details.
 package connection
 
 import (
 	"context"
+	"crypto/tls"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -45,7 +47,7 @@ const (
 
 // StoreBuilderFn is a function that builds and returns a Store with a given
 // store config.
-type StoreBuilderFn func(ctx context.Context, local client.Client, cfg v1.SecretStoreConfig) (Store, error)
+type StoreBuilderFn func(ctx context.Context, local client.Client, tcfg *tls.Config, cfg v1.SecretStoreConfig) (Store, error)
 
 // A DetailsManagerOption configures a DetailsManager.
 type DetailsManagerOption func(*DetailsManager)
@@ -57,6 +59,13 @@ func WithStoreBuilder(sb StoreBuilderFn) DetailsManagerOption {
 	}
 }
 
+// WithTLSConfig configures the TLS config to use.
+func WithTLSConfig(tcfg *tls.Config) DetailsManagerOption {
+	return func(m *DetailsManager) {
+		m.tcfg = tcfg
+	}
+}
+
 // DetailsManager is a connection details manager that satisfies the required
 // interfaces to work with connection details by managing interaction with
 // different store implementations.
@@ -64,11 +73,13 @@ type DetailsManager struct {
 	client       client.Client
 	newConfig    func() StoreConfig
 	storeBuilder StoreBuilderFn
+	tcfg         *tls.Config
 }
 
 // NewDetailsManager returns a new connection DetailsManager.
 func NewDetailsManager(c client.Client, of schema.GroupVersionKind, o ...DetailsManagerOption) *DetailsManager {
 	nc := func() StoreConfig {
+		//nolint:forcetypeassert // If the supplied type isn't a StoreConfig it's a programming error. We want to panic.
 		return resource.MustCreateObject(of, c.Scheme()).(StoreConfig)
 	}
 
@@ -142,12 +153,7 @@ func (m *DetailsManager) FetchConnection(ctx context.Context, so resource.Connec
 }
 
 // PropagateConnection propagate connection details from one resource to another.
-func (m *DetailsManager) PropagateConnection(ctx context.Context, to resource.LocalConnectionSecretOwner, from resource.ConnectionSecretOwner) (propagated bool, err error) { // nolint:interfacer
-	// NOTE(turkenh): Had to add linter exception for "interfacer" suggestion
-	// to use "store.SecretOwner" as the type of "to" parameter. We want to
-	// keep it as "resource.LocalConnectionSecretOwner" to satisfy the
-	// ConnectionPropagater interface for XR Claims.
-
+func (m *DetailsManager) PropagateConnection(ctx context.Context, to resource.LocalConnectionSecretOwner, from resource.ConnectionSecretOwner) (propagated bool, err error) {
 	// Either from does not expose a connection secret, or to does not want one.
 	if from.GetPublishConnectionDetailsTo() == nil || to.GetPublishConnectionDetailsTo() == nil {
 		return false, nil
@@ -188,7 +194,7 @@ func (m *DetailsManager) connectStore(ctx context.Context, p *v1.PublishConnecti
 		return nil, errors.Wrap(err, errGetStoreConfig)
 	}
 
-	return m.storeBuilder(ctx, m.client, sc.GetStoreConfig())
+	return m.storeBuilder(ctx, m.client, m.tcfg, sc.GetStoreConfig())
 }
 
 // SecretToWriteMustBeOwnedBy requires that the current object is a

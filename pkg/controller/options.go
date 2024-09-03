@@ -14,9 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package controller configures controller options.
 package controller
 
 import (
+	"crypto/tls"
 	"time"
 
 	"k8s.io/client-go/util/workqueue"
@@ -25,6 +27,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/feature"
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/pkg/statemetrics"
 )
 
 // DefaultOptions returns a functional set of options with conservative
@@ -57,12 +61,48 @@ type Options struct {
 
 	// Features that should be enabled.
 	Features *feature.Flags
+
+	// ESSOptions for External Secret Stores.
+	ESSOptions *ESSOptions
+
+	// MetricOptions for recording metrics.
+	MetricOptions *MetricOptions
+
+	// ChangeLogOptions for recording change logs.
+	ChangeLogOptions *ChangeLogOptions
 }
 
 // ForControllerRuntime extracts options for controller-runtime.
 func (o Options) ForControllerRuntime() controller.Options {
+	recoverPanic := true
+
 	return controller.Options{
 		MaxConcurrentReconciles: o.MaxConcurrentReconciles,
 		RateLimiter:             ratelimiter.NewController(),
+		RecoverPanic:            &recoverPanic,
 	}
+}
+
+// ESSOptions for External Secret Stores.
+type ESSOptions struct {
+	TLSConfig     *tls.Config
+	TLSSecretName *string
+}
+
+// MetricOptions for recording metrics.
+type MetricOptions struct {
+	// PollStateMetricInterval at which each controller should record state
+	PollStateMetricInterval time.Duration
+
+	// MetricsRecorder to use for recording metrics.
+	MRMetrics managed.MetricRecorder
+
+	// MRStateMetrics to use for recording state metrics.
+	MRStateMetrics *statemetrics.MRStateMetrics
+}
+
+// ChangeLogOptions for recording changes to managed resources into the change
+// logs.
+type ChangeLogOptions struct {
+	ChangeLogger managed.ChangeLogger
 }

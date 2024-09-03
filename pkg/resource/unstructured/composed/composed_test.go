@@ -22,9 +22,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 )
+
+var _ client.Object = &Unstructured{}
 
 func TestFromReference(t *testing.T) {
 	ref := corev1.ObjectReference{
@@ -39,16 +42,17 @@ func TestFromReference(t *testing.T) {
 	}{
 		"New": {
 			ref: ref,
-			want: &Unstructured{Unstructured: unstructured.Unstructured{
-				Object: map[string]any{
-					"apiVersion": "a/v1",
-					"kind":       "k",
-					"metadata": map[string]any{
-						"name":      "name",
-						"namespace": "ns",
+			want: &Unstructured{
+				Unstructured: unstructured.Unstructured{
+					Object: map[string]any{
+						"apiVersion": "a/v1",
+						"kind":       "k",
+						"metadata": map[string]any{
+							"name":      "name",
+							"namespace": "ns",
+						},
 					},
 				},
-			},
 			},
 		},
 	}
@@ -138,6 +142,31 @@ func TestWriteConnectionSecretToReference(t *testing.T) {
 			got := tc.u.GetWriteConnectionSecretToReference()
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("\nu.GetWriteConnectionSecretToReference(): -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestObservedGeneration(t *testing.T) {
+	cases := map[string]struct {
+		u    *Unstructured
+		want int64
+	}{
+		"Set": {
+			u: New(func(u *Unstructured) {
+				u.SetObservedGeneration(123)
+			}),
+			want: 123,
+		},
+		"NotFound": {
+			u: New(),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := tc.u.GetObservedGeneration()
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("\nu.GetObservedGeneration(): -want, +got:\n%s", diff)
 			}
 		})
 	}

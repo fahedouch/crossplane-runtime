@@ -25,19 +25,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/claim"
 )
 
 // A Conditioned may have conditions set or retrieved. Conditions are typically
 // indicate the status of both a resource and its reconciliation process.
 type Conditioned interface {
 	SetConditions(c ...xpv1.Condition)
-	GetCondition(xpv1.ConditionType) xpv1.Condition
+	GetCondition(ct xpv1.ConditionType) xpv1.Condition
 }
 
 // A ClaimReferencer may reference a resource claim.
 type ClaimReferencer interface {
-	SetClaimReference(r *corev1.ObjectReference)
-	GetClaimReference() *corev1.ObjectReference
+	SetClaimReference(r *claim.Reference)
+	GetClaimReference() *claim.Reference
 }
 
 // A ManagedResourceReferencer may reference a concrete managed resource.
@@ -61,22 +62,22 @@ type ConnectionSecretWriterTo interface {
 }
 
 // A ConnectionDetailsPublisherTo may write a connection details secret to a
-// secret store
+// secret store.
 type ConnectionDetailsPublisherTo interface {
 	SetPublishConnectionDetailsTo(r *xpv1.PublishConnectionDetailsTo)
 	GetPublishConnectionDetailsTo() *xpv1.PublishConnectionDetailsTo
+}
+
+// A Manageable resource may specify a ManagementPolicies.
+type Manageable interface {
+	SetManagementPolicies(p xpv1.ManagementPolicies)
+	GetManagementPolicies() xpv1.ManagementPolicies
 }
 
 // An Orphanable resource may specify a DeletionPolicy.
 type Orphanable interface {
 	SetDeletionPolicy(p xpv1.DeletionPolicy)
 	GetDeletionPolicy() xpv1.DeletionPolicy
-}
-
-// A ProviderReferencer may reference a provider resource.
-type ProviderReferencer interface {
-	GetProviderReference() *xpv1.Reference
-	SetProviderReference(p *xpv1.Reference)
 }
 
 // A ProviderConfigReferencer may reference a provider config resource.
@@ -106,33 +107,47 @@ type Finalizer interface {
 
 // A CompositionSelector may select a composition of resources.
 type CompositionSelector interface {
-	SetCompositionSelector(*metav1.LabelSelector)
+	SetCompositionSelector(s *metav1.LabelSelector)
 	GetCompositionSelector() *metav1.LabelSelector
 }
 
 // A CompositionReferencer may reference a composition of resources.
 type CompositionReferencer interface {
-	SetCompositionReference(*corev1.ObjectReference)
+	SetCompositionReference(ref *corev1.ObjectReference)
 	GetCompositionReference() *corev1.ObjectReference
 }
 
 // A CompositionRevisionReferencer may reference a specific revision of a
 // composition of resources.
 type CompositionRevisionReferencer interface {
-	SetCompositionRevisionReference(*corev1.ObjectReference)
+	SetCompositionRevisionReference(ref *corev1.ObjectReference)
 	GetCompositionRevisionReference() *corev1.ObjectReference
+}
+
+// A CompositionRevisionSelector may reference a set of
+// composition revisions.
+type CompositionRevisionSelector interface {
+	SetCompositionRevisionSelector(selector *metav1.LabelSelector)
+	GetCompositionRevisionSelector() *metav1.LabelSelector
 }
 
 // A CompositionUpdater uses a composition, and may update which revision of
 // that composition it uses.
 type CompositionUpdater interface {
-	SetCompositionUpdatePolicy(*xpv1.UpdatePolicy)
+	SetCompositionUpdatePolicy(p *xpv1.UpdatePolicy)
 	GetCompositionUpdatePolicy() *xpv1.UpdatePolicy
+}
+
+// A CompositeResourceDeleter creates a composite, and controls the policy
+// used to delete the composite.
+type CompositeResourceDeleter interface {
+	SetCompositeDeletePolicy(policy *xpv1.CompositeDeletePolicy)
+	GetCompositeDeletePolicy() *xpv1.CompositeDeletePolicy
 }
 
 // A ComposedResourcesReferencer may reference the resources it composes.
 type ComposedResourcesReferencer interface {
-	SetResourceReferences([]corev1.ObjectReference)
+	SetResourceReferences(refs []corev1.ObjectReference)
 	GetResourceReferences() []corev1.ObjectReference
 }
 
@@ -140,6 +155,12 @@ type ComposedResourcesReferencer interface {
 type CompositeResourceReferencer interface {
 	SetResourceReference(r *corev1.ObjectReference)
 	GetResourceReference() *corev1.ObjectReference
+}
+
+// An EnvironmentConfigReferencer references a list of EnvironmentConfigs.
+type EnvironmentConfigReferencer interface {
+	SetEnvironmentConfigReferences(refs []corev1.ObjectReference)
+	GetEnvironmentConfigReferences() []corev1.ObjectReference
 }
 
 // A UserCounter can count how many users it has.
@@ -155,6 +176,12 @@ type ConnectionDetailsPublishedTimer interface {
 	GetConnectionDetailsLastPublishedTime() *metav1.Time
 }
 
+// ReconciliationObserver can track data observed by resource reconciler.
+type ReconciliationObserver interface {
+	SetObservedGeneration(generation int64)
+	GetObservedGeneration() int64
+}
+
 // An Object is a Kubernetes object.
 type Object interface {
 	metav1.Object
@@ -163,13 +190,13 @@ type Object interface {
 
 // A Managed is a Kubernetes object representing a concrete managed
 // resource (e.g. a CloudSQL instance).
-type Managed interface {
+type Managed interface { //nolint:interfacebloat // This interface has to be big.
 	Object
 
-	ProviderReferencer
 	ProviderConfigReferencer
 	ConnectionSecretWriterTo
 	ConnectionDetailsPublisherTo
+	Manageable
 	Orphanable
 
 	Conditioned
@@ -208,20 +235,23 @@ type ProviderConfigUsageList interface {
 }
 
 // A Composite resource composes one or more Composed resources.
-type Composite interface {
+type Composite interface { //nolint:interfacebloat // This interface has to be big.
 	Object
 
 	CompositionSelector
 	CompositionReferencer
 	CompositionUpdater
 	CompositionRevisionReferencer
+	CompositionRevisionSelector
 	ComposedResourcesReferencer
+	EnvironmentConfigReferencer
 	ClaimReferencer
 	ConnectionSecretWriterTo
 	ConnectionDetailsPublisherTo
 
 	Conditioned
 	ConnectionDetailsPublishedTimer
+	ReconciliationObserver
 }
 
 // Composed resources can be a composed into a Composite resource.
@@ -231,20 +261,24 @@ type Composed interface {
 	Conditioned
 	ConnectionSecretWriterTo
 	ConnectionDetailsPublisherTo
+	ReconciliationObserver
 }
 
 // A CompositeClaim for a Composite resource.
-type CompositeClaim interface {
+type CompositeClaim interface { //nolint:interfacebloat // This interface has to be big.
 	Object
 
 	CompositionSelector
 	CompositionReferencer
 	CompositionUpdater
 	CompositionRevisionReferencer
+	CompositionRevisionSelector
+	CompositeResourceDeleter
 	CompositeResourceReferencer
 	LocalConnectionSecretWriterTo
 	ConnectionDetailsPublisherTo
 
 	Conditioned
 	ConnectionDetailsPublishedTimer
+	ReconciliationObserver
 }

@@ -17,8 +17,6 @@ limitations under the License.
 package meta
 
 import (
-	"fmt"
-	"hash/fnv"
 	"testing"
 	"time"
 
@@ -162,7 +160,7 @@ func TestAsOwner(t *testing.T) {
 }
 
 func TestAsController(t *testing.T) {
-	controller := true
+	flag := true
 
 	tests := map[string]struct {
 		r    *xpv1.TypedReference
@@ -176,11 +174,12 @@ func TestAsController(t *testing.T) {
 				UID:        uid,
 			},
 			want: metav1.OwnerReference{
-				APIVersion: groupVersion,
-				Kind:       kind,
-				Name:       name,
-				UID:        uid,
-				Controller: &controller,
+				APIVersion:         groupVersion,
+				Kind:               kind,
+				Name:               name,
+				UID:                uid,
+				Controller:         &flag,
+				BlockOwnerDeletion: &flag,
 			},
 		},
 	}
@@ -826,6 +825,7 @@ func TestWasDeleted(t *testing.T) {
 		})
 	}
 }
+
 func TestWasCreated(t *testing.T) {
 	now := metav1.Now()
 	zero := metav1.Time{}
@@ -1112,7 +1112,6 @@ func TestExternalCreateSucceededDuring(t *testing.T) {
 }
 
 func TestExternalCreateIncomplete(t *testing.T) {
-
 	now := time.Now().Format(time.RFC3339)
 	earlier := time.Now().Add(-1 * time.Second).Format(time.RFC3339)
 	evenEarlier := time.Now().Add(-1 * time.Minute).Format(time.RFC3339)
@@ -1180,142 +1179,41 @@ func TestExternalCreateIncomplete(t *testing.T) {
 	}
 }
 
-func TestAllowPropagation(t *testing.T) {
-	fromns := "from-namespace"
-	from := "from-name"
-	tons := "to-namespace"
-	to := "to-name"
-
-	tohash := func() string {
-		h := fnv.New32a()
-		h.Write([]byte(tons))
-		h.Write([]byte(to))
-		return fmt.Sprintf("%x", h.Sum32())
-	}()
-
-	type args struct {
-		from metav1.Object
-		to   metav1.Object
-	}
-	type want struct {
-		from metav1.Object
-		to   metav1.Object
-	}
-
+func TestIsPaused(t *testing.T) {
 	cases := map[string]struct {
-		args args
-		want want
+		o    metav1.Object
+		want bool
 	}{
-		"Successful": {
-			args: args{
-				from: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-					Namespace: fromns,
-					Name:      from,
-					Annotations: map[string]string{
-						"existing": "annotation",
-					},
-				}},
-				to: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-					Namespace: tons,
-					Name:      to,
-					Annotations: map[string]string{
-						"existing": "annotation",
-					},
-				}},
-			},
-			want: want{
-				from: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-					Namespace: fromns,
-					Name:      from,
-					Annotations: map[string]string{
-						"existing":                              "annotation",
-						AnnotationKeyPropagateToPrefix + tohash: tons + "/" + to,
-					},
-				}},
-				to: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-					Namespace: tons,
-					Name:      to,
-					Annotations: map[string]string{
-						"existing":                          "annotation",
-						AnnotationKeyPropagateFromNamespace: fromns,
-						AnnotationKeyPropagateFromName:      from,
-					},
-				}},
-			},
+		"HasPauseAnnotationSetTrue": {
+			o: func() metav1.Object {
+				p := &corev1.Pod{}
+				p.SetAnnotations(map[string]string{
+					AnnotationKeyReconciliationPaused: "true",
+				})
+				return p
+			}(),
+			want: true,
+		},
+		"NoPauseAnnotation": {
+			o:    &corev1.Pod{},
+			want: false,
+		},
+		"HasEmptyPauseAnnotation": {
+			o: func() metav1.Object {
+				p := &corev1.Pod{}
+				p.SetAnnotations(map[string]string{
+					AnnotationKeyReconciliationPaused: "",
+				})
+				return p
+			}(),
+			want: false,
 		},
 	}
-
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			AllowPropagation(tc.args.from, tc.args.to)
-			if diff := cmp.Diff(tc.want.from, tc.args.from); diff != "" {
-				t.Errorf("AllowPropagation(...): -want from, +got from\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.to, tc.args.to); diff != "" {
-				t.Errorf("AllowPropagation(...): -want to, +got to\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestAllowsPropagationFrom(t *testing.T) {
-	ns := "coolns"
-	name := "coolname"
-
-	cases := map[string]struct {
-		to   metav1.Object
-		want types.NamespacedName
-	}{
-		"Successful": {
-			to: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-				AnnotationKeyPropagateFromNamespace: ns,
-				AnnotationKeyPropagateFromName:      name,
-			}}},
-			want: types.NamespacedName{Namespace: ns, Name: name},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			got := AllowsPropagationFrom(tc.to)
+			got := IsPaused(tc.o)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Errorf("AllowsPropagationFrom(...): -want, +got\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestAllowsPropagationTo(t *testing.T) {
-	nsA := "coolns"
-	nameA := "coolname"
-	nsB := "coolerns"
-	nameB := "coolername"
-
-	cases := map[string]struct {
-		from metav1.Object
-		want map[types.NamespacedName]bool
-	}{
-		"Successful": {
-			from: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-				"existing": "annotation",
-				AnnotationKeyPropagateToPrefix + "missingslash":     "wat",
-				AnnotationKeyPropagateToPrefix + "missingname":      "wat/",
-				AnnotationKeyPropagateToPrefix + "missingnamespace": "/wat",
-				AnnotationKeyPropagateToPrefix + "a":                nsA + "/" + nameA,
-				AnnotationKeyPropagateToPrefix + "b":                nsB + "/" + nameB,
-			}}},
-			want: map[types.NamespacedName]bool{
-				{Namespace: nsA, Name: nameA}: true,
-				{Namespace: nsB, Name: nameB}: true,
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			got := AllowsPropagationTo(tc.from)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Errorf("AllowsPropagationTo(...): -want, +got\n%s", diff)
+				t.Errorf("IsPaused(...): -want, +got:\n%s", diff)
 			}
 		})
 	}
